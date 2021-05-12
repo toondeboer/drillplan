@@ -1,6 +1,5 @@
 numpy
 tqdm
-shapely
 sklearn
 matplotlib
 pandas
