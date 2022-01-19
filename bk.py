@@ -14,7 +14,7 @@ DELTA = 50
 def run(file, digs):
     pop_size = POP_SIZE
     delta = DELTA
-    boringen = ['BOR05', 'BOR20', 'PB']
+    boringen = ['BOR05', 'BOR10', 'BOR20', 'PB']
 
     clusters = k_means(file, digs, delta)
 
@@ -44,7 +44,7 @@ def k_means(fileName, digs, delta):
     fileName = fileName
     delta = delta
 
-    df = pd.read_csv(fileName, delimiter='\t')
+    df = pd.read_csv(fileName, delimiter=',')
     xs = df['Position X'].to_numpy()
     ys = df['Position Y'].to_numpy()
     contour = np.column_stack((xs, ys))
@@ -107,9 +107,11 @@ def calc_fitness(pop):
 def plot(file, p):
     for c in p:
         if c[2] == 0:
-            plt.scatter(c[0], c[1], facecolors='none', edgecolors='r')
-        elif c[2] == 1:
             plt.scatter(c[0], c[1], c='g')
+        elif c[2] == 1:
+            plt.scatter(c[0], c[1], c='y')
+        elif c[2] == 2:
+            plt.scatter(c[0], c[1], c='r')
         else:
             plt.scatter(c[0], c[1], c='b')
     plt.savefig(file.split('.')[-2] + '_afbeelding')
@@ -117,5 +119,5 @@ def plot(file, p):
 
 if __name__ == '__main__':
     file = sys.argv[1]
-    digs = [int(sys.argv[2]),int(sys.argv[3]),int(sys.argv[4])]
+    digs = [int(sys.argv[2]),int(sys.argv[3]),int(sys.argv[4]),int(sys.argv[5])]
     run(file, digs)
