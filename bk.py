@@ -8,8 +8,8 @@ from shapely.geometry import Point, Polygon
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 
-POP_SIZE = 5000
-DELTA = 50
+POP_SIZE = 20000
+DELTA = 500
 
 def run(file, digs):
     pop_size = POP_SIZE
