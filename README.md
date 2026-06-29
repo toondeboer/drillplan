@@ -24,8 +24,10 @@ your machine and there is no backend to maintain.
    distributed candidate locations.
 3. **Assign types.** There are four measurement types — `BOR05`, `BOR10`, `BOR20`
    (borings at 5/10/20 m) and `PB` (*peilbuis* / monitoring well). Each location is given
-   exactly one type. DrillPlan searches many random assignments (plus a hill-climb polish)
-   and keeps the one where same-type holes are spread out the most.
+   exactly one type. DrillPlan uses an **iterated local search** (hill-climbing type swaps
+   with random restarts) to minimize an *inverse-distance energy* — close same-type pairs
+   are penalized hardest — so each type ends up spread evenly with a large minimum
+   separation rather than just pushed toward the site edges.
 4. **Output.** A color-coded interactive map, a downloadable result CSV
    (`id, x, y, 0.0, type`), and a PNG of the map.
 
@@ -101,4 +103,8 @@ Hosted on **Vercel** as a static/client app:
 ## Legacy
 
 The original Python implementation lives in [`legacy/`](./legacy) with its own README.
-It is not used by the website; it is kept for reference and for cross-checking the port.
+It is not used by the website; it is kept for reference. The grid/K-Means stages still
+mirror it, but the type-assignment step **intentionally diverges**: the web app optimizes
+an inverse-distance energy normalized per type (see [`lib/algorithm/optimize.ts`](./lib/algorithm/optimize.ts)),
+which spreads same-type holes more evenly than the legacy `calc_fitness`, so the two no
+longer produce identical results.
