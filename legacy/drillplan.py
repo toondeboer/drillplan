@@ -1,3 +1,14 @@
+"""Legacy reference implementation of the drillplan algorithm.
+
+This is the original Python script, kept for reference and for cross-checking the
+TypeScript port that powers the web app. It is NOT used by the website.
+
+Usage:
+    python drillplan.py <area.csv> <#BOR05> <#BOR10> <#BOR20> <#PB>
+
+<area.csv> must contain "Position X" and "Position Y" columns describing the
+vertices of the site outline. Outputs <area>_resultaat.csv and <area>_afbeelding.png.
+"""
 import sys
 import numpy as np
 import pandas as pd
@@ -69,7 +80,7 @@ def k_means(fileName, digs, delta):
 
     points = points.reshape(len(points) // 2, 2)
 
-    kmeans = KMeans(init='k-means++', n_clusters=np.sum(digs))
+    kmeans = KMeans(init='k-means++', n_clusters=int(np.sum(digs)), n_init='auto')
     kmeans.fit(points)
 
     return  kmeans.cluster_centers_
