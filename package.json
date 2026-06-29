@@ -13,7 +13,7 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "ml-kmeans": "^6.0.0",
+    "ml-kmeans": "^7.0.1",
     "next": "^15.3.0",
     "papaparse": "^5.4.1",
     "react": "^19.1.0",
