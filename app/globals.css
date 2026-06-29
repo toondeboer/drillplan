@@ -1,21 +1,39 @@
 @import "tailwindcss";
 
 @theme {
-  --color-brand-50: #eef6ff;
-  --color-brand-100: #d9eaff;
-  --color-brand-200: #bcd9ff;
-  --color-brand-300: #8ec0ff;
-  --color-brand-400: #599eff;
-  --color-brand-500: #337bff;
-  --color-brand-600: #1d5cf0;
-  --color-brand-700: #1747cc;
-  --color-brand-800: #193ca4;
-  --color-brand-900: #1a3782;
+  /* Fonts (CSS variables provided by next/font in layout.tsx) */
+  --font-sans: var(--font-space-grotesk), system-ui, sans-serif;
+  --font-mono: var(--font-ibm-plex-mono), monospace;
 
-  --color-bor05: #16a34a;
-  --color-bor10: #d97706;
-  --color-bor20: #dc2626;
-  --color-pb: #2563eb;
+  /* Neutrals — warm stone */
+  --color-paper: #ece4d3;
+  --color-surface: #faf6ec;
+  --color-surface-2: #f6f1e6;
+  --color-surface-inset: #fffdf7;
+  --color-map-paper: #fbf8f1;
+
+  --color-ink: #2a2419;
+  --color-ink-2: #6f6657;
+  --color-ink-3: #9a8f7c;
+  --color-ink-4: #a99c84;
+
+  --color-hairline: #e1d7c3;
+  --color-hairline-2: #e6dcc8;
+  --color-divider: #ddd2bd;
+
+  /* Accent — clay (the only UI accent) */
+  --color-clay: #bd5a2e;
+  --color-clay-hover: #a24a22;
+  --color-clay-on: #fdf6ee;
+  --color-clay-soft-bg: rgba(189, 90, 46, 0.07);
+  --color-clay-soft-bg-2: rgba(189, 90, 46, 0.1);
+  --color-clay-soft-border: rgba(189, 90, 46, 0.22);
+
+  /* Measurement-type colors — geological ramp */
+  --color-bor05: #d2a24c;
+  --color-bor10: #bf7233;
+  --color-bor20: #8f3f1f;
+  --color-pb: #2f6b73;
 }
 
 :root {
@@ -28,10 +46,42 @@ body {
 }
 
 body {
-  background:
-    radial-gradient(1200px 600px at 100% -10%, var(--color-brand-50), transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, #f1f5f9, transparent 55%),
-    #f8fafc;
-  color: #0f172a;
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background-color: #ece4d3;
+  background-image:
+    linear-gradient(rgba(120, 100, 70, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 100, 70, 0.05) 1px, transparent 1px);
+  background-size: 34px 34px;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Remove native number-input spinners (steppers use custom −/+ buttons) */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+::selection {
+  background: rgba(189, 90, 46, 0.18);
+}
+
+@keyframes drillslide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(360%);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
