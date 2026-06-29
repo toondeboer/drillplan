@@ -146,3 +146,4 @@ get-pip.py
 # Generated outputs from the legacy script
 *_resultaat.csv
 *_afbeelding.png
+.vercel
