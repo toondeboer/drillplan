@@ -188,7 +188,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Language>("nl");
 
   useEffect(() => {
+    // Hydrate the persisted language after mount. The initial render must use
+    // the "nl" default so server and client markup match; reading localStorage
+    // during lazy init would touch `window` on the server and break SSR. The
+    // one-time setState here is intentional, hence the rule suppression.
     const stored = window.localStorage.getItem(STORAGE_KEY);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (stored === "nl" || stored === "en") setLangState(stored);
   }, []);
 
