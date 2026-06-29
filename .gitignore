@@ -129,3 +129,20 @@ dmypy.json
 .pyre/
 
 .DS_Store
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.vercel/
+npm-debug.log*
+
+# Large installers / bootstrap scripts must never be committed
+*.exe
+get-pip.py
+
+# Generated outputs from the legacy script
+*_resultaat.csv
+*_afbeelding.png
