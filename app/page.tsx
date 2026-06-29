@@ -1,20 +1,17 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { FileUpload } from "@/components/FileUpload";
 import { Legend } from "@/components/Legend";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { MeasurementControls } from "@/components/MeasurementControls";
 import { ProgressBar } from "@/components/ProgressBar";
 import { SitePlot, type SitePlotHandle } from "@/components/SitePlot";
-import {
-  downloadFile,
-  parseAreaCsv,
-  placementsToCsv,
-} from "@/lib/csv";
+import { downloadFile, parseAreaCsv, placementsToCsv } from "@/lib/csv";
 import {
   type ComputeInput,
   type ComputeResult,
+  type Placement,
   type Point,
   type WorkerOutMessage,
 } from "@/lib/algorithm/types";
@@ -22,22 +19,42 @@ import { format, useI18n } from "@/lib/i18n";
 
 type Status = "idle" | "computing" | "done" | "error";
 
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm backdrop-blur sm:p-6">
-      {children}
-    </section>
-  );
-}
-
 function baseName(name: string): string {
   return name.replace(/\.[^.]+$/, "") || "drillplan";
 }
 
-function phaseProgress(phase: string, fraction: number): number {
-  if (phase === "grid") return fraction * 0.15;
-  if (phase === "kmeans") return 0.15 + fraction * 0.1;
-  return 0.25 + fraction * 0.75;
+/**
+ * The "Spread" readout: the smallest distance between any two placements of the
+ * same measurement type — i.e. the guaranteed minimum same-type separation, in
+ * the polygon's units (metres). Returns null when no type has two or more holes
+ * (so there is no same-type pair to measure). Derived purely from the result.
+ */
+function minSameTypeDistance(placements: Placement[]): number | null {
+  let min = Infinity;
+  for (let i = 0; i < placements.length; i++) {
+    for (let j = i + 1; j < placements.length; j++) {
+      if (placements[i].typeIndex !== placements[j].typeIndex) continue;
+      const dx = placements[i].x - placements[j].x;
+      const dy = placements[i].y - placements[j].y;
+      const d = Math.hypot(dx, dy);
+      if (d < min) min = d;
+    }
+  }
+  return Number.isFinite(min) ? min : null;
+}
+
+function StepBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-md border border-clay-soft-border bg-clay-soft-bg-2 px-[7px] py-[3px] font-mono text-xs font-semibold tracking-[0.04em] text-clay">
+      {children}
+    </span>
+  );
+}
+
+function CardTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{children}</h2>
+  );
 }
 
 export default function Home() {
@@ -48,14 +65,17 @@ export default function Home() {
   const [counts, setCounts] = useState<number[]>([5, 3, 2, 4]);
 
   const [status, setStatus] = useState<Status>("idle");
-  const [progress, setProgress] = useState(0);
-  const [phaseLabel, setPhaseLabel] = useState<string>("");
   const [result, setResult] = useState<ComputeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const plotRef = useRef<SitePlotHandle>(null);
 
   const total = counts.reduce((a, b) => a + b, 0);
+
+  const spread = useMemo(
+    () => (result ? minSameTypeDistance(result.placements) : null),
+    [result],
+  );
 
   const loadFile = useCallback(async (file: File) => {
     setError(null);
@@ -67,6 +87,7 @@ export default function Home() {
       setFileName(file.name);
     } catch (err) {
       setPolygon(null);
+      setStatus("error");
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
@@ -74,7 +95,7 @@ export default function Home() {
   const loadExample = useCallback(async () => {
     const res = await fetch("/sample.csv");
     const blob = await res.blob();
-    await loadFile(new File([blob], "voorbeeld.csv", { type: "text/csv" }));
+    await loadFile(new File([blob], "example-site.csv", { type: "text/csv" }));
   }, [loadFile]);
 
   const runCompute = useCallback(() => {
@@ -82,8 +103,6 @@ export default function Home() {
     setStatus("computing");
     setError(null);
     setResult(null);
-    setProgress(0);
-    setPhaseLabel(t.phaseGrid);
 
     const worker = new Worker(
       new URL("../workers/compute.worker.ts", import.meta.url),
@@ -93,24 +112,16 @@ export default function Home() {
 
     worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
       const msg = e.data;
-      if (msg.type === "progress") {
-        setProgress(phaseProgress(msg.phase, msg.fraction));
-        setPhaseLabel(
-          msg.phase === "grid"
-            ? t.phaseGrid
-            : msg.phase === "kmeans"
-              ? t.phaseKmeans
-              : t.phaseOptimize,
-        );
-      } else if (msg.type === "result") {
+      if (msg.type === "result") {
         setResult(msg.result);
         setStatus("done");
         worker.terminate();
-      } else {
+      } else if (msg.type === "error") {
         setError(msg.message);
         setStatus("error");
         worker.terminate();
       }
+      // "progress" messages are ignored — the busy indicator is indeterminate.
     };
     worker.onerror = (e) => {
       setError(e.message || "Worker error");
@@ -118,11 +129,11 @@ export default function Home() {
       worker.terminate();
     };
     worker.postMessage(input);
-  }, [polygon, counts, total, t]);
+  }, [polygon, counts, total]);
 
   const handleDownloadCsv = useCallback(() => {
     if (!result) return;
-    downloadFile(`${baseName(fileName)}_resultaat.csv`, placementsToCsv(result.placements));
+    downloadFile(`${baseName(fileName)}_result.csv`, placementsToCsv(result.placements));
   }, [result, fileName]);
 
   const handleDownloadImage = useCallback(() => {
@@ -130,7 +141,7 @@ export default function Home() {
     if (!url) return;
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${baseName(fileName)}_afbeelding.png`;
+    a.download = `${baseName(fileName)}_map.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -139,40 +150,65 @@ export default function Home() {
   const computing = status === "computing";
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+    <div className="mx-auto max-w-[1180px] px-7 pb-[60px] pt-[26px]">
       {/* Header */}
-      <header className="mb-8 flex items-center justify-between">
+      <header className="flex items-center justify-between gap-[18px] border-b border-divider pb-[18px]">
         <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
-            <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" aria-hidden>
-              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
-              <circle cx="12" cy="12" r="2.4" fill="currentColor" />
-              <circle cx="7" cy="8" r="1.4" fill="currentColor" opacity="0.6" />
-              <circle cx="17" cy="9" r="1.4" fill="currentColor" opacity="0.6" />
-              <circle cx="8.5" cy="16" r="1.4" fill="currentColor" opacity="0.6" />
-            </svg>
-          </span>
-          <span className="text-xl font-bold tracking-tight text-slate-800">
-            {t.appName}
-          </span>
+          <svg width="36" height="36" viewBox="0 0 40 40" fill="none" aria-hidden>
+            <polygon
+              points="7,15 19,6 33,12 36,28 23,35 8,29"
+              fill="rgba(189,90,46,0.10)"
+              stroke="#bd5a2e"
+              strokeWidth="2"
+              strokeLinejoin="round"
+            />
+            <circle cx="13" cy="17" r="2.5" fill="#d2a24c" />
+            <circle cx="27" cy="13" r="2.5" fill="#bf7233" />
+            <circle cx="20.5" cy="23" r="2.5" fill="#8f3f1f" />
+            <circle cx="14" cy="28" r="2.5" fill="#2f6b73" />
+            <circle cx="30" cy="25" r="2.5" fill="#bd5a2e" />
+          </svg>
+          <div className="leading-[1.05]">
+            <div className="text-[19px] font-bold tracking-[-0.02em] text-ink">
+              {t.appName}
+            </div>
+            <div className="mt-0.5 font-mono text-[10.5px] uppercase tracking-[0.06em] text-ink-3">
+              Site investigation planner
+            </div>
+          </div>
         </div>
-        <LanguageToggle />
+        <div className="flex items-center gap-3.5">
+          <div className="hidden items-center gap-[7px] rounded-full border border-divider bg-[#f7f2e7] px-3 py-[5px] sm:flex">
+            <span className="h-[7px] w-[7px] rounded-full bg-[#3f7a4e]" />
+            <span className="font-mono text-[10.5px] tracking-[0.02em] text-ink-2">
+              {t.privacy}
+            </span>
+          </div>
+          <LanguageToggle />
+        </div>
       </header>
 
       {/* Hero */}
-      <div className="mb-8 max-w-3xl">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+      <div className="mb-[26px] mt-[30px] max-w-[700px]">
+        <h1 className="text-[34px] font-bold leading-[1.1] tracking-[-0.025em] text-ink [text-wrap:balance]">
           {t.tagline}
         </h1>
-        <p className="mt-3 text-slate-500">{t.intro}</p>
+        <p className="mt-3.5 max-w-[620px] text-[15.5px] leading-[1.6] text-ink-2">
+          {t.intro}
+        </p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-        {/* Left: inputs */}
-        <div className="space-y-6">
-          <Card>
+      {/* Main grid */}
+      <div className="grid grid-cols-1 items-start gap-[22px] min-[880px]:grid-cols-[368px_minmax(0,1fr)]">
+        {/* Left rail */}
+        <div className="flex flex-col gap-[18px]">
+          {/* Step 1 */}
+          <section className="rounded-[14px] border border-hairline bg-surface p-[22px]">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-800">{t.step1Title}</h2>
+              <div className="flex items-center gap-2.5">
+                <StepBadge>01</StepBadge>
+                <CardTitle>{t.step1Title}</CardTitle>
+              </div>
               {polygon && (
                 <button
                   type="button"
@@ -180,122 +216,126 @@ export default function Home() {
                     setPolygon(null);
                     setResult(null);
                     setStatus("idle");
+                    setError(null);
                   }}
-                  className="text-sm font-medium text-slate-400 hover:text-slate-700"
+                  className="cursor-pointer text-[13px] font-medium text-ink-3 transition hover:text-ink"
                 >
                   {t.changeFile}
                 </button>
               )}
             </div>
+
             {polygon ? (
-              <div className="flex items-center gap-3 rounded-xl bg-emerald-50 px-4 py-3 text-emerald-800">
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden>
-                  <path
-                    d="m5 13 4 4L19 7"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                <span className="text-sm">
-                  <span className="font-semibold">{fileName}</span> ·{" "}
-                  {format(t.areaLoaded, { n: polygon.length })}
-                </span>
+              <div className="flex items-center gap-3 rounded-[11px] border border-[#cfe0d0] bg-[#eef5ec] px-[15px] py-[13px]">
+                <span className="h-[9px] w-[9px] shrink-0 rounded-full bg-[#3f7a4e]" />
+                <div className="min-w-0">
+                  <div className="truncate text-[14px] font-semibold text-ink">{fileName}</div>
+                  <div className="mt-px font-mono text-[11.5px] text-[#6f7d6b]">
+                    {format(t.vertexLabel, { n: polygon.length })}
+                  </div>
+                </div>
               </div>
             ) : (
               <FileUpload onFile={loadFile} onExample={loadExample} />
             )}
-          </Card>
+          </section>
 
-          <Card>
-            <h2 className="mb-4 text-lg font-semibold text-slate-800">{t.step2Title}</h2>
+          {/* Step 2 */}
+          <section className="rounded-[14px] border border-hairline bg-surface p-[22px]">
+            <div className="mb-3.5 flex items-center gap-2.5">
+              <StepBadge>02</StepBadge>
+              <CardTitle>{t.step2Title}</CardTitle>
+            </div>
             <MeasurementControls counts={counts} onChange={setCounts} />
 
-            <div className="mt-5">
+            <div className="mt-4">
               {computing ? (
-                <ProgressBar value={progress} label={phaseLabel} />
+                <ProgressBar label={t.computing} />
               ) : (
                 <button
                   type="button"
                   onClick={runCompute}
                   disabled={!polygon || total < 1}
-                  className="w-full rounded-xl bg-brand-600 px-5 py-3 text-base font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  className="w-full rounded-[11px] py-[13px] text-[15px] font-semibold transition enabled:cursor-pointer enabled:bg-clay enabled:text-clay-on enabled:hover:bg-clay-hover disabled:cursor-not-allowed disabled:bg-divider disabled:text-ink-4"
                 >
                   {status === "done" ? t.recompute : t.compute}
                 </button>
               )}
               {total < 1 && polygon && (
-                <p className="mt-2 text-center text-sm text-amber-600">
+                <p className="mt-[9px] text-center text-[12.5px] text-[#b07b1d]">
                   {t.needAtLeastOne}
                 </p>
               )}
             </div>
-          </Card>
+          </section>
         </div>
 
-        {/* Right: visualization */}
-        <div className="space-y-6">
-          <Card>
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-slate-800">{t.step3Title}</h2>
-              {result && (
-                <span className="rounded-full bg-brand-50 px-3 py-1 text-sm font-semibold text-brand-700">
-                  {format(t.resultsReady, { n: result.placements.length })}
+        {/* Right column */}
+        <div className="flex flex-col gap-[18px]">
+          <section className="rounded-[14px] border border-hairline bg-surface p-[22px]">
+            <div className="mb-[15px] flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <StepBadge>03</StepBadge>
+                <CardTitle>{t.step3Title}</CardTitle>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-[10.5px] tracking-[0.04em] text-ink-4">
+                  RD · EPSG:28992
                 </span>
-              )}
+                {result && (
+                  <span className="rounded-full bg-clay-soft-bg-2 px-[11px] py-1 font-mono text-xs font-semibold text-clay">
+                    {format(t.resultChip, { n: result.placements.length })}
+                  </span>
+                )}
+              </div>
             </div>
 
-            {polygon ? (
-              <SitePlot
-                ref={plotRef}
-                polygon={polygon}
-                placements={result?.placements}
-              />
-            ) : (
-              <div className="flex h-72 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-slate-400">
-                {t.noArea}
-              </div>
-            )}
+            <SitePlot ref={plotRef} polygon={polygon} placements={result?.placements} />
 
             {result && (
               <>
-                <div className="mt-5">
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2.5">
                   <Legend placements={result.placements} />
+                  <div className="flex items-center gap-2 rounded-full border border-hairline-2 bg-surface-inset px-[13px] py-[5px]">
+                    <span className="text-[11.5px] text-ink-3">{t.spreadScore}</span>
+                    <span className="font-mono text-[13px] font-semibold text-ink">
+                      {spread == null ? "—" : `${Math.round(spread).toLocaleString()} m`}
+                    </span>
+                  </div>
                 </div>
-                <div className="mt-5 flex flex-wrap gap-3">
+                <div className="mt-4 flex gap-[11px]">
                   <button
                     type="button"
                     onClick={handleDownloadCsv}
-                    className="flex-1 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
+                    className="flex-1 cursor-pointer rounded-[10px] bg-ink py-[11px] text-[13.5px] font-semibold text-[#f3ead9] transition hover:bg-[#423a2c]"
                   >
                     {t.downloadCsv}
                   </button>
                   <button
                     type="button"
                     onClick={handleDownloadImage}
-                    className="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    className="flex-1 cursor-pointer rounded-[10px] border border-[#d8cdb6] bg-white py-[11px] text-[13.5px] font-semibold text-ink transition hover:bg-[#f6f0e4]"
                   >
                     {t.downloadImage}
                   </button>
                 </div>
               </>
             )}
-          </Card>
+          </section>
 
           {error && (
-            <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-red-800">
-              <h3 className="font-semibold">{t.errorTitle}</h3>
-              <p className="mt-1 text-sm">{error}</p>
+            <div className="rounded-[14px] border border-[#e6c0b4] bg-[#f8ebe6] px-5 py-4">
+              <h3 className="text-[14px] font-semibold text-[#9a3b1f]">{t.errorTitle}</h3>
+              <p className="mt-1.5 text-[13px] leading-[1.5] text-[#a05a40]">{error}</p>
             </div>
           )}
 
-          <Card>
-            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">
+          <section className="rounded-[14px] border border-hairline-2 bg-surface-2 px-[22px] py-5">
+            <h3 className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-4">
               {t.aboutTitle}
             </h3>
-            <p className="text-sm leading-relaxed text-slate-500">{t.about}</p>
-          </Card>
+            <p className="text-[13.5px] leading-[1.65] text-ink-2">{t.about}</p>
+          </section>
         </div>
       </div>
     </div>

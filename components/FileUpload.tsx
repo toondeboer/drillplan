@@ -32,7 +32,7 @@ export function FileUpload({ onFile, onExample }: FileUploadProps) {
         }}
         onDragOver={(e) => {
           e.preventDefault();
-          setDragging(true);
+          if (!dragging) setDragging(true);
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={(e) => {
@@ -40,29 +40,33 @@ export function FileUpload({ onFile, onExample }: FileUploadProps) {
           setDragging(false);
           handleFiles(e.dataTransfer.files);
         }}
-        className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition ${
-          dragging
-            ? "border-brand-500 bg-brand-50"
-            : "border-slate-300 bg-slate-50 hover:border-brand-400 hover:bg-brand-50/50"
+        className={`flex cursor-pointer flex-col items-center justify-center rounded-[13px] border-2 border-dashed px-5 py-[30px] text-center transition ${
+          dragging ? "border-clay bg-clay-soft-bg" : "border-[#d3c6ac] bg-surface-2"
         }`}
       >
-        <svg
-          className="mb-3 h-10 w-10 text-brand-500"
-          fill="none"
-          viewBox="0 0 24 24"
-          strokeWidth={1.5}
-          stroke="currentColor"
-          aria-hidden
-        >
-          <path
+        <span className="mb-3.5 inline-flex items-center gap-2 rounded-lg border-[1.5px] border-[#cdbfa6] bg-white px-[11px] py-[7px]">
+          <svg
+            width="15"
+            height="17"
+            viewBox="0 0 24 26"
+            fill="none"
+            stroke="#bd5a2e"
+            strokeWidth="1.8"
             strokeLinecap="round"
             strokeLinejoin="round"
-            d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"
-          />
-        </svg>
-        <p className="font-medium text-slate-700">{t.dropHere}</p>
-        <p className="mt-1 text-sm text-slate-400">{t.dropHint}</p>
-        <span className="mt-3 inline-flex items-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700">
+            aria-hidden
+          >
+            <path d="M14 2H5a2 2 0 0 0-2 2v18a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9z" />
+            <path d="M14 2v7h7" />
+            <path d="M7.5 14h6M7.5 18h9" />
+          </svg>
+          <span className="font-mono text-xs font-semibold tracking-[0.04em] text-clay">
+            .CSV
+          </span>
+        </span>
+        <p className="text-[14.5px] font-semibold text-ink">{t.dropHere}</p>
+        <p className="mt-1.5 text-[13px] text-ink-3">{t.dropHint}</p>
+        <span className="mt-3.5 inline-flex items-center rounded-[9px] bg-clay px-[18px] py-[9px] text-[13.5px] font-semibold text-clay-on transition hover:bg-clay-hover">
           {t.browse}
         </span>
         <input
@@ -74,12 +78,12 @@ export function FileUpload({ onFile, onExample }: FileUploadProps) {
         />
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
-        <p className="text-slate-400">{t.fileNeeds}</p>
+      <div className="mt-[13px] flex items-center justify-between gap-2.5">
+        <span className="max-w-[210px] text-xs leading-snug text-ink-3">{t.fileNeeds}</span>
         <button
           type="button"
           onClick={onExample}
-          className="font-semibold text-brand-600 underline-offset-2 hover:underline"
+          className="cursor-pointer whitespace-nowrap text-[13px] font-semibold text-clay underline underline-offset-[3px]"
         >
           {t.tryExample}
         </button>

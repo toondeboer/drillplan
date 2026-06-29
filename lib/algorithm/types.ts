@@ -5,14 +5,15 @@ export interface Point {
 
 /**
  * The four measurement types, in the same order the legacy script used
- * (`['BOR05', 'BOR10', 'BOR20', 'PB']`). Colors mirror the original plot
- * (green / amber / red / blue).
+ * (`['BOR05', 'BOR10', 'BOR20', 'PB']`). Colors use the cartographic
+ * geological ramp: depth darkens (sand/ochre → sienna → rust/umber) and the
+ * monitoring well is the cool slate-teal outlier.
  */
 export const MEASUREMENT_TYPES = [
-  { code: "BOR05", color: "#16a34a" },
-  { code: "BOR10", color: "#d97706" },
-  { code: "BOR20", color: "#dc2626" },
-  { code: "PB", color: "#2563eb" },
+  { code: "BOR05", color: "#d2a24c" },
+  { code: "BOR10", color: "#bf7233" },
+  { code: "BOR20", color: "#8f3f1f" },
+  { code: "PB", color: "#2f6b73" },
 ] as const;
 
 export type MeasurementCode = (typeof MEASUREMENT_TYPES)[number]["code"];

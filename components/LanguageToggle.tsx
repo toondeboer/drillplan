@@ -3,8 +3,8 @@
 import { useI18n, type Language } from "@/lib/i18n";
 
 const OPTIONS: { value: Language; label: string }[] = [
-  { value: "nl", label: "NL" },
   { value: "en", label: "EN" },
+  { value: "nl", label: "NL" },
 ];
 
 export function LanguageToggle() {
@@ -13,7 +13,7 @@ export function LanguageToggle() {
     <div
       role="group"
       aria-label="Language"
-      className="inline-flex rounded-full border border-slate-200 bg-white/70 p-0.5 shadow-sm backdrop-blur"
+      className="flex overflow-hidden rounded-lg border border-divider"
     >
       {OPTIONS.map((opt) => {
         const active = lang === opt.value;
@@ -23,10 +23,8 @@ export function LanguageToggle() {
             type="button"
             onClick={() => setLang(opt.value)}
             aria-pressed={active}
-            className={`rounded-full px-3 py-1 text-sm font-semibold transition ${
-              active
-                ? "bg-brand-600 text-white shadow"
-                : "text-slate-500 hover:text-slate-800"
+            className={`cursor-pointer px-[11px] py-1.5 font-mono text-xs font-semibold tracking-[0.04em] transition ${
+              active ? "bg-clay text-clay-on" : "bg-[#f7f2e7] text-ink-3 hover:text-ink-2"
             }`}
           >
             {opt.label}
