@@ -138,6 +138,9 @@ next-env.d.ts
 .vercel/
 npm-debug.log*
 
+# Vitest coverage output
+coverage/
+
 # Large installers / bootstrap scripts must never be committed
 *.exe
 get-pip.py

@@ -69,7 +69,7 @@ function randomAssignment(counts: number[], total: number, order: Int32Array): I
  * distance 1/d between every pair. `d` is clamped away from zero so coincident centers
  * (a degenerate K-Means outcome) yield a large finite penalty rather than Infinity/NaN.
  */
-function pairValueMatrix(centers: Point[]): Float64Array {
+export function pairValueMatrix(centers: Point[]): Float64Array {
   const n = centers.length;
   const pv = new Float64Array(n * n);
   for (let i = 0; i < n; i++) {
@@ -85,7 +85,7 @@ function pairValueMatrix(centers: Point[]): Float64Array {
 }
 
 /** Per-type weight 1 / C(count, 2). Types with fewer than two holes have no pairs. */
-function typeWeights(counts: number[]): Float64Array {
+export function typeWeights(counts: number[]): Float64Array {
   const w = new Float64Array(counts.length);
   for (let t = 0; t < counts.length; t++) {
     const c = counts[t];
@@ -95,7 +95,7 @@ function typeWeights(counts: number[]): Float64Array {
 }
 
 /** Full O(n²) spread score. Used for the initial seed and exact (drift-free) resyncs. */
-function score(pv: Float64Array, assign: Int32Array, weights: Float64Array, n: number): number {
+export function score(pv: Float64Array, assign: Int32Array, weights: Float64Array, n: number): number {
   let f = 0;
   for (let i = 0; i < n; i++) {
     const ti = assign[i];
@@ -114,7 +114,7 @@ function score(pv: Float64Array, assign: Int32Array, weights: Float64Array, n: n
  * is O(n) instead of recomputing the whole O(n²) score. The (i, j) pair itself stays
  * cross-type before and after the swap, so it never contributes.
  */
-function swapDelta(
+export function swapDelta(
   pv: Float64Array,
   assign: Int32Array,
   weights: Float64Array,
