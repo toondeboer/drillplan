@@ -301,12 +301,12 @@ export default function Home() {
         {/* Right column */}
         <div className="flex flex-col gap-[18px]">
           <section className="rounded-[14px] border border-hairline bg-surface p-[22px]">
-            <div className="mb-[15px] flex items-center justify-between gap-3">
+            <div className="mb-[15px] flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5">
               <div className="flex items-center gap-2.5">
                 <StepBadge>03</StepBadge>
                 <CardTitle>{t.step3Title}</CardTitle>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <span className="font-mono text-[10.5px] tracking-[0.04em] text-ink-4">
                   RD · EPSG:28992
                 </span>
