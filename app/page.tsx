@@ -68,6 +68,7 @@ export default function Home() {
   const [status, setStatus] = useState<Status>("idle");
   const [result, setResult] = useState<ComputeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [highlightedType, setHighlightedType] = useState<number | null>(null);
 
   const plotRef = useRef<SitePlotHandle>(null);
 
@@ -82,6 +83,7 @@ export default function Home() {
     setError(null);
     setResult(null);
     setStatus("idle");
+    setHighlightedType(null);
     try {
       const { polygon } = await parseAreaCsv(file);
       setPolygon(polygon);
@@ -97,6 +99,7 @@ export default function Home() {
     setError(null);
     setResult(null);
     setStatus("idle");
+    setHighlightedType(null);
     setPolygon(generateExamplePolygon());
     setFileName("example-site.csv");
   }, []);
@@ -110,6 +113,7 @@ export default function Home() {
     setStatus("computing");
     setError(null);
     setResult(null);
+    setHighlightedType(null);
 
     const worker = new Worker(
       new URL("../workers/compute.worker.ts", import.meta.url),
@@ -146,8 +150,15 @@ export default function Home() {
   const handleAnimationDone = useCallback(() => setStatus("done"), []);
 
   const handleReplay = useCallback(() => {
-    if (result?.animation) setStatus("animating");
+    if (result?.animation) {
+      setHighlightedType(null);
+      setStatus("animating");
+    }
   }, [result]);
+
+  const toggleHighlight = useCallback((typeIndex: number) => {
+    setHighlightedType((cur) => (cur === typeIndex ? null : typeIndex));
+  }, []);
 
   const handleDownloadImage = useCallback(() => {
     const url = plotRef.current?.toPng();
@@ -299,6 +310,15 @@ export default function Home() {
                 <span className="font-mono text-[10.5px] tracking-[0.04em] text-ink-4">
                   RD · EPSG:28992
                 </span>
+                {status === "animating" && (
+                  <button
+                    type="button"
+                    onClick={() => plotRef.current?.skip()}
+                    className="cursor-pointer rounded-full border border-hairline-2 bg-surface px-[11px] py-1 font-mono text-xs font-semibold text-ink-2 transition hover:text-ink"
+                  >
+                    » {t.skipAnimation}
+                  </button>
+                )}
                 {status === "done" && result?.animation && (
                   <button
                     type="button"
@@ -323,12 +343,17 @@ export default function Home() {
               animation={result?.animation ?? null}
               animate={status === "animating"}
               onAnimationDone={handleAnimationDone}
+              highlightType={highlightedType}
             />
 
             {status === "done" && result && (
               <>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2.5">
-                  <Legend placements={result.placements} />
+                  <Legend
+                    placements={result.placements}
+                    activeType={highlightedType}
+                    onToggleType={toggleHighlight}
+                  />
                   <div className="flex items-center gap-2 rounded-full border border-hairline-2 bg-surface-inset px-[13px] py-[5px]">
                     <span className="text-[11.5px] text-ink-3">{t.spreadScore}</span>
                     <span className="font-mono text-[13px] font-semibold text-ink">

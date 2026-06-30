@@ -79,9 +79,9 @@ export function FileUpload({ onFile, onExample, onDownloadExample }: FileUploadP
         />
       </div>
 
-      <div className="mt-[13px] flex items-center justify-between gap-2.5">
-        <span className="max-w-[160px] text-xs leading-snug text-ink-3">{t.fileNeeds}</span>
-        <div className="flex flex-col items-end gap-1.5">
+      <div className="mt-[13px] flex flex-col gap-2.5">
+        <p className="max-w-[240px] text-xs leading-snug text-ink-3">{t.fileNeeds}</p>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
           <button
             type="button"
             onClick={onExample}

@@ -47,6 +47,8 @@ const GRID_DOT_R = 1.7;
 
 export interface SitePlotHandle {
   toPng: () => string | null;
+  /** Jump the running k-means animation straight to the final result. */
+  skip: () => void;
 }
 
 interface SitePlotProps {
@@ -55,6 +57,8 @@ interface SitePlotProps {
   animation?: KMeansAnimation | null;
   animate?: boolean;
   onAnimationDone?: () => void;
+  /** When set, only placements of this measurement-type index are emphasized. */
+  highlightType?: number | null;
 }
 
 interface Projector {
@@ -227,14 +231,17 @@ function drawPlacements(
   projector: Projector,
   hovered: number | null,
   alpha = 1,
+  highlightType: number | null = null,
 ) {
   ctx.save();
-  ctx.globalAlpha = alpha;
   placements.forEach((pl, idx) => {
     const [sx, sy] = projector.project(pl);
     const color = MEASUREMENT_TYPES[pl.typeIndex].color;
     const isHover = hovered === idx;
-    const r = isHover ? 8 : 5.5;
+    const dimmed = highlightType != null && pl.typeIndex !== highlightType;
+    const emphasized = highlightType != null && pl.typeIndex === highlightType;
+    ctx.globalAlpha = dimmed ? alpha * 0.16 : alpha;
+    const r = isHover ? 8 : emphasized ? 7 : 5.5;
     if (isHover) {
       ctx.beginPath();
       ctx.arc(sx, sy, r + 4, 0, Math.PI * 2);
@@ -303,6 +310,7 @@ function drawStatic(
   projector: Projector,
   hovered: number | null,
   monoFamily: string,
+  highlightType: number | null = null,
 ) {
   const hasPoly = !!polygon && polygon.length >= 2;
   drawBackground(ctx);
@@ -311,7 +319,7 @@ function drawStatic(
   drawFrame(ctx);
   if (!hasPoly || !polygon) return;
   drawPolygon(ctx, polygon, projector);
-  drawPlacements(ctx, placements, projector, hovered);
+  drawPlacements(ctx, placements, projector, hovered, 1, highlightType);
   drawScaleAndNorth(ctx, projector, monoFamily);
 }
 
@@ -380,7 +388,14 @@ function prepareCanvas(
 }
 
 export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SitePlot(
-  { polygon, placements = [], animation = null, animate = false, onAnimationDone },
+  {
+    polygon,
+    placements = [],
+    animation = null,
+    animate = false,
+    onAnimationDone,
+    highlightType = null,
+  },
   ref,
 ) {
   const { t } = useI18n();
@@ -399,6 +414,9 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
 
   useImperativeHandle(ref, () => ({
     toPng: () => canvasRef.current?.toDataURL("image/png") ?? null,
+    skip: () => {
+      skipRef.current = true;
+    },
   }));
 
   // Redraw once the web fonts have loaded so graticule/scale labels render in
@@ -420,8 +438,16 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     if (!canvas) return;
     const prepared = prepareCanvas(canvas);
     if (!prepared) return;
-    drawStatic(prepared.ctx, polygon, placements, projector, hovered, prepared.mono);
-  }, [animate, polygon, placements, projector, hovered, fontsReady]);
+    drawStatic(
+      prepared.ctx,
+      polygon,
+      placements,
+      projector,
+      hovered,
+      prepared.mono,
+      highlightType,
+    );
+  }, [animate, polygon, placements, projector, hovered, fontsReady, highlightType]);
 
   // K-means animation timeline.
   useEffect(() => {
@@ -580,18 +606,6 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
             {t.noAreaHint}
           </div>
         </div>
-      )}
-
-      {animate && (
-        <button
-          type="button"
-          onClick={() => {
-            skipRef.current = true;
-          }}
-          className="absolute bottom-3 left-3 z-10 cursor-pointer rounded-full border border-hairline-2 bg-surface/90 px-[13px] py-[5px] font-mono text-[11.5px] font-semibold text-ink-2 backdrop-blur transition hover:text-ink"
-        >
-          {t.skipAnimation}
-        </button>
       )}
 
       {hoveredPlacement && hoveredScreen && (
