@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { kMeansCenters } from "./kmeans";
+import { kMeansCenters, kMeansWithHistory } from "./kmeans";
 import type { Point } from "./types";
 
 function grid(n: number): Point[] {
@@ -54,5 +54,39 @@ describe("kMeansCenters", () => {
       expect(Number.isFinite(c.x)).toBe(true);
       expect(Number.isFinite(c.y)).toBe(true);
     }
+  });
+});
+
+describe("kMeansWithHistory", () => {
+  it("records frames whose last frame equals the final centers", () => {
+    const points = grid(10);
+    const k = 4;
+    const { centers, frames } = kMeansWithHistory(points, k);
+
+    expect(centers).toHaveLength(k);
+    expect(frames.length).toBeGreaterThanOrEqual(1);
+    // Every frame holds k centroids, all finite.
+    for (const frame of frames) {
+      expect(frame).toHaveLength(k);
+      for (const c of frame) {
+        expect(Number.isFinite(c.x)).toBe(true);
+        expect(Number.isFinite(c.y)).toBe(true);
+      }
+    }
+    // The last frame is exactly the centers used for placement.
+    expect(frames[frames.length - 1]).toEqual(centers);
+  });
+
+  it("agrees with kMeansCenters' edge-case handling", () => {
+    expect(kMeansWithHistory(grid(5), 0)).toEqual({ centers: [], frames: [] });
+
+    const few: Point[] = [
+      { x: 1, y: 2 },
+      { x: 3, y: 4 },
+    ];
+    const { centers } = kMeansWithHistory(few, 5);
+    expect(centers).toEqual(few);
+    centers[0].x = 999;
+    expect(few[0].x).toBe(1); // must be copies
   });
 });

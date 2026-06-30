@@ -7,7 +7,8 @@ import { LanguageToggle } from "@/components/LanguageToggle";
 import { MeasurementControls } from "@/components/MeasurementControls";
 import { ProgressBar } from "@/components/ProgressBar";
 import { SitePlot, type SitePlotHandle } from "@/components/SitePlot";
-import { downloadFile, parseAreaCsv, placementsToCsv } from "@/lib/csv";
+import { downloadFile, parseAreaCsv, placementsToCsv, polygonToCsv } from "@/lib/csv";
+import { generateExamplePolygon } from "@/lib/exampleArea";
 import {
   type ComputeInput,
   type ComputeResult,
@@ -17,7 +18,7 @@ import {
 } from "@/lib/algorithm/types";
 import { format, useI18n } from "@/lib/i18n";
 
-type Status = "idle" | "computing" | "done" | "error";
+type Status = "idle" | "computing" | "animating" | "done" | "error";
 
 function baseName(name: string): string {
   return name.replace(/\.[^.]+$/, "") || "drillplan";
@@ -67,6 +68,7 @@ export default function Home() {
   const [status, setStatus] = useState<Status>("idle");
   const [result, setResult] = useState<ComputeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [highlightedType, setHighlightedType] = useState<number | null>(null);
 
   const plotRef = useRef<SitePlotHandle>(null);
 
@@ -81,6 +83,7 @@ export default function Home() {
     setError(null);
     setResult(null);
     setStatus("idle");
+    setHighlightedType(null);
     try {
       const { polygon } = await parseAreaCsv(file);
       setPolygon(polygon);
@@ -92,29 +95,37 @@ export default function Home() {
     }
   }, []);
 
-  const loadExample = useCallback(async () => {
-    const res = await fetch("/sample.csv");
-    const blob = await res.blob();
-    await loadFile(new File([blob], "example-site.csv", { type: "text/csv" }));
-  }, [loadFile]);
+  const loadExample = useCallback(() => {
+    setError(null);
+    setResult(null);
+    setStatus("idle");
+    setHighlightedType(null);
+    setPolygon(generateExamplePolygon());
+    setFileName("example-site.csv");
+  }, []);
+
+  const handleDownloadExample = useCallback(() => {
+    downloadFile("drillplan-example.csv", polygonToCsv(generateExamplePolygon()));
+  }, []);
 
   const runCompute = useCallback(() => {
     if (!polygon || total < 1) return;
     setStatus("computing");
     setError(null);
     setResult(null);
+    setHighlightedType(null);
 
     const worker = new Worker(
       new URL("../workers/compute.worker.ts", import.meta.url),
       { type: "module" },
     );
-    const input: ComputeInput = { polygon, counts };
+    const input: ComputeInput = { polygon, counts, captureAnimation: true };
 
     worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
       const msg = e.data;
       if (msg.type === "result") {
         setResult(msg.result);
-        setStatus("done");
+        setStatus(msg.result.animation ? "animating" : "done");
         worker.terminate();
       } else if (msg.type === "error") {
         setError(msg.message);
@@ -135,6 +146,19 @@ export default function Home() {
     if (!result) return;
     downloadFile(`${baseName(fileName)}_result.csv`, placementsToCsv(result.placements));
   }, [result, fileName]);
+
+  const handleAnimationDone = useCallback(() => setStatus("done"), []);
+
+  const handleReplay = useCallback(() => {
+    if (result?.animation) {
+      setHighlightedType(null);
+      setStatus("animating");
+    }
+  }, [result]);
+
+  const toggleHighlight = useCallback((typeIndex: number) => {
+    setHighlightedType((cur) => (cur === typeIndex ? null : typeIndex));
+  }, []);
 
   const handleDownloadImage = useCallback(() => {
     const url = plotRef.current?.toPng();
@@ -236,7 +260,11 @@ export default function Home() {
                 </div>
               </div>
             ) : (
-              <FileUpload onFile={loadFile} onExample={loadExample} />
+              <FileUpload
+                onFile={loadFile}
+                onExample={loadExample}
+                onDownloadExample={handleDownloadExample}
+              />
             )}
           </section>
 
@@ -258,7 +286,7 @@ export default function Home() {
                   disabled={!polygon || total < 1}
                   className="w-full rounded-[11px] py-[13px] text-[15px] font-semibold transition enabled:cursor-pointer enabled:bg-clay enabled:text-clay-on enabled:hover:bg-clay-hover disabled:cursor-not-allowed disabled:bg-divider disabled:text-ink-4"
                 >
-                  {status === "done" ? t.recompute : t.compute}
+                  {status === "done" || status === "animating" ? t.recompute : t.compute}
                 </button>
               )}
               {total < 1 && polygon && (
@@ -282,6 +310,24 @@ export default function Home() {
                 <span className="font-mono text-[10.5px] tracking-[0.04em] text-ink-4">
                   RD · EPSG:28992
                 </span>
+                {status === "animating" && (
+                  <button
+                    type="button"
+                    onClick={() => plotRef.current?.skip()}
+                    className="cursor-pointer rounded-full border border-hairline-2 bg-surface px-[11px] py-1 font-mono text-xs font-semibold text-ink-2 transition hover:text-ink"
+                  >
+                    » {t.skipAnimation}
+                  </button>
+                )}
+                {status === "done" && result?.animation && (
+                  <button
+                    type="button"
+                    onClick={handleReplay}
+                    className="cursor-pointer rounded-full border border-hairline-2 bg-surface px-[11px] py-1 font-mono text-xs font-semibold text-ink-2 transition hover:text-ink"
+                  >
+                    ↺ {t.replayAnimation}
+                  </button>
+                )}
                 {result && (
                   <span className="rounded-full bg-clay-soft-bg-2 px-[11px] py-1 font-mono text-xs font-semibold text-clay">
                     {format(t.resultChip, { n: result.placements.length })}
@@ -290,12 +336,24 @@ export default function Home() {
               </div>
             </div>
 
-            <SitePlot ref={plotRef} polygon={polygon} placements={result?.placements} />
+            <SitePlot
+              ref={plotRef}
+              polygon={polygon}
+              placements={result?.placements}
+              animation={result?.animation ?? null}
+              animate={status === "animating"}
+              onAnimationDone={handleAnimationDone}
+              highlightType={highlightedType}
+            />
 
-            {result && (
+            {status === "done" && result && (
               <>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2.5">
-                  <Legend placements={result.placements} />
+                  <Legend
+                    placements={result.placements}
+                    activeType={highlightedType}
+                    onToggleType={toggleHighlight}
+                  />
                   <div className="flex items-center gap-2 rounded-full border border-hairline-2 bg-surface-inset px-[13px] py-[5px]">
                     <span className="text-[11.5px] text-ink-3">{t.spreadScore}</span>
                     <span className="font-mono text-[13px] font-semibold text-ink">

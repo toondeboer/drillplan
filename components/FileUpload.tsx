@@ -6,9 +6,10 @@ import { useI18n } from "@/lib/i18n";
 interface FileUploadProps {
   onFile: (file: File) => void;
   onExample: () => void;
+  onDownloadExample: () => void;
 }
 
-export function FileUpload({ onFile, onExample }: FileUploadProps) {
+export function FileUpload({ onFile, onExample, onDownloadExample }: FileUploadProps) {
   const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -78,15 +79,24 @@ export function FileUpload({ onFile, onExample }: FileUploadProps) {
         />
       </div>
 
-      <div className="mt-[13px] flex items-center justify-between gap-2.5">
-        <span className="max-w-[210px] text-xs leading-snug text-ink-3">{t.fileNeeds}</span>
-        <button
-          type="button"
-          onClick={onExample}
-          className="cursor-pointer whitespace-nowrap text-[13px] font-semibold text-clay underline underline-offset-[3px]"
-        >
-          {t.tryExample}
-        </button>
+      <div className="mt-[13px] flex flex-col gap-2.5">
+        <p className="max-w-[240px] text-xs leading-snug text-ink-3">{t.fileNeeds}</p>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <button
+            type="button"
+            onClick={onExample}
+            className="cursor-pointer whitespace-nowrap text-[13px] font-semibold text-clay underline underline-offset-[3px]"
+          >
+            {t.tryExample}
+          </button>
+          <button
+            type="button"
+            onClick={onDownloadExample}
+            className="cursor-pointer whitespace-nowrap text-[12.5px] font-medium text-ink-3 underline underline-offset-[3px] transition hover:text-ink"
+          >
+            {t.downloadExample}
+          </button>
+        </div>
       </div>
     </div>
   );
