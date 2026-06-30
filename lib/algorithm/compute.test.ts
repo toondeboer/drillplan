@@ -57,6 +57,38 @@ describe("compute", () => {
     }
   });
 
+  it("omits the animation payload unless captureAnimation is set", () => {
+    const result = compute({
+      polygon: square,
+      counts: [2, 1, 0, 0],
+      gridResolution: 30,
+      iterations: 200,
+      refine: false,
+    });
+    expect(result.animation).toBeUndefined();
+  });
+
+  it("captures grid points (capped) and k-means frames when requested", () => {
+    const result = compute({
+      polygon: square,
+      counts: [3, 2, 1, 0],
+      gridResolution: 200,
+      iterations: 200,
+      refine: false,
+      captureAnimation: true,
+    });
+    expect(result.animation).toBeDefined();
+    const anim = result.animation!;
+    expect(anim.frames.length).toBeGreaterThanOrEqual(1);
+    // Each frame has one centroid per placement.
+    for (const frame of anim.frames) {
+      expect(frame).toHaveLength(result.placements.length);
+    }
+    // Grid is downsampled to the display cap.
+    expect(anim.gridPoints.length).toBeGreaterThan(0);
+    expect(anim.gridPoints.length).toBeLessThanOrEqual(2500);
+  });
+
   it("reports progress for the grid, kmeans and optimize phases", () => {
     const phases = new Set<ComputePhase>();
     compute(

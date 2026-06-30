@@ -38,6 +38,16 @@ export interface ComputeInput {
   iterations?: number;
   /** Whether to run the hill-climb refinement after the random search. */
   refine?: boolean;
+  /** Capture grid points + per-iteration centroids so the UI can animate k-means. */
+  captureAnimation?: boolean;
+}
+
+/** Data needed to replay the k-means clustering as an animation. */
+export interface KMeansAnimation {
+  /** Interior grid points to display (downsampled from the full candidate set). */
+  gridPoints: Point[];
+  /** Centroid positions per Lloyd iteration; the last frame are the final centers. */
+  frames: Point[][];
 }
 
 export interface ComputeResult {
@@ -46,6 +56,8 @@ export interface ComputeResult {
   score: number;
   /** Number of candidate grid points found inside the polygon. */
   candidateCount: number;
+  /** Present only when `captureAnimation` was requested. */
+  animation?: KMeansAnimation;
 }
 
 export type ComputePhase = "grid" | "kmeans" | "optimize";

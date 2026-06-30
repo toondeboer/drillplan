@@ -61,6 +61,16 @@ export function parseAreaCsv(file: File): Promise<ParsedArea> {
 }
 
 /**
+ * Build an area CSV in the format `parseAreaCsv` expects: a "Position X,Position Y"
+ * header followed by one row per polygon vertex. Used for the downloadable example.
+ */
+export function polygonToCsv(polygon: Point[]): string {
+  const header = "Position X,Position Y";
+  const rows = polygon.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+  return [header, ...rows].join("\n");
+}
+
+/**
  * Build the result CSV in the same format as the legacy script:
  * `id, x(4 decimals), y(4 decimals), 0.0, type` with no header row.
  */

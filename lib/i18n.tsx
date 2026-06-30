@@ -26,6 +26,7 @@ export interface Dict {
   dropHint: string;
   browse: string;
   tryExample: string;
+  downloadExample: string;
   fileNeeds: string;
   vertexLabel: string; // "{n} vertices loaded"
   noArea: string;
@@ -44,6 +45,8 @@ export interface Dict {
   spreadScore: string;
   downloadCsv: string;
   downloadImage: string;
+  skipAnimation: string;
+  replayAnimation: string;
 
   tipId: string;
 
@@ -71,6 +74,7 @@ const nl: Dict = {
   dropHint: "sleep een CSV hierheen, of",
   browse: "Bestand kiezen",
   tryExample: "Probeer een voorbeeld",
+  downloadExample: "Voorbeeld-CSV downloaden",
   fileNeeds: 'Vereist kolommen "Position X" en "Position Y".',
   vertexLabel: "{n} hoekpunten geladen",
   noArea: "Geen terrein geladen",
@@ -89,6 +93,8 @@ const nl: Dict = {
   spreadScore: "Spreiding",
   downloadCsv: "Download CSV",
   downloadImage: "Download afbeelding",
+  skipAnimation: "Overslaan",
+  replayAnimation: "Opnieuw afspelen",
 
   tipId: "Nr.",
 
@@ -121,6 +127,7 @@ const en: Dict = {
   dropHint: "drag a CSV here, or",
   browse: "Choose a file",
   tryExample: "Try an example",
+  downloadExample: "Download example CSV",
   fileNeeds: 'Needs "Position X" and "Position Y" columns.',
   vertexLabel: "{n} vertices loaded",
   noArea: "No site loaded",
@@ -139,6 +146,8 @@ const en: Dict = {
   spreadScore: "Spread",
   downloadCsv: "Download CSV",
   downloadImage: "Download image",
+  skipAnimation: "Skip",
+  replayAnimation: "Replay",
 
   tipId: "No.",
 

@@ -10,7 +10,12 @@ import {
   useState,
 } from "react";
 import { getBounds, type Bounds } from "@/lib/algorithm/geometry";
-import { MEASUREMENT_TYPES, type Placement, type Point } from "@/lib/algorithm/types";
+import {
+  MEASUREMENT_TYPES,
+  type KMeansAnimation,
+  type Placement,
+  type Point,
+} from "@/lib/algorithm/types";
 import { useI18n } from "@/lib/i18n";
 
 const WIDTH = 920;
@@ -26,7 +31,19 @@ const THEME = {
   line: "#6f5d44",
   fill: "rgba(189,90,46,0.06)",
   ring: "#fbf8f1",
+  dot: "rgba(111,93,68,0.45)", // neutral interior-grid dot before clustering
 } as const;
+
+// Animation timeline (ms).
+const SWEEP_MS = 700; // lay the interior grid over the area
+const SEED_MS = 320; // drop the initial k-means++ centroids
+const ITER_TARGET_MS = 2600; // total time budget for all Lloyd steps
+const STEP_MIN_MS = 90;
+const STEP_MAX_MS = 360;
+const REVEAL_MS = 650; // fade grid out, color into the final result
+
+const CENTROID_R = 7;
+const GRID_DOT_R = 1.7;
 
 export interface SitePlotHandle {
   toPng: () => string | null;
@@ -35,6 +52,9 @@ export interface SitePlotHandle {
 interface SitePlotProps {
   polygon: Point[] | null;
   placements?: Placement[];
+  animation?: KMeansAnimation | null;
+  animate?: boolean;
+  onAnimationDone?: () => void;
 }
 
 interface Projector {
@@ -76,75 +96,107 @@ function niceStep(span: number, target: number): number {
   return pow * 10;
 }
 
-function draw(
-  ctx: CanvasRenderingContext2D,
-  polygon: Point[] | null,
-  placements: Placement[],
-  projector: Projector,
-  hovered: number | null,
-  monoFamily: string,
-) {
-  const hasPoly = !!polygon && polygon.length >= 2;
+function easeInOut(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/** Distinct hue per cluster (golden-angle spread); clusters ≠ measurement types. */
+function clusterColor(i: number): string {
+  return `hsl(${Math.round((i * 137.508) % 360)}, 52%, 52%)`;
+}
+
+function nearestIndex(p: Point, centers: Point[]): number {
+  let best = 0;
+  let bestDist = Infinity;
+  for (let c = 0; c < centers.length; c++) {
+    const dx = p.x - centers[c].x;
+    const dy = p.y - centers[c].y;
+    const d = dx * dx + dy * dy;
+    if (d < bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+  return best;
+}
+
+// ── Layer drawing helpers ─────────────────────────────────────────────────────
+
+function drawBackground(ctx: CanvasRenderingContext2D) {
   ctx.clearRect(0, 0, WIDTH, HEIGHT);
   ctx.fillStyle = THEME.bg;
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
+}
 
-  // Graticule
+function drawGraticule(
+  ctx: CanvasRenderingContext2D,
+  projector: Projector,
+  monoFamily: string,
+) {
   ctx.lineWidth = 1;
   ctx.strokeStyle = THEME.grid;
-  if (hasPoly) {
-    const b = projector.bounds;
-    const stepX = niceStep(b.maxX - b.minX, 5);
-    const stepY = niceStep(b.maxY - b.minY, 5);
-    ctx.font = `10px ${monoFamily}`;
-    ctx.fillStyle = THEME.label;
-    for (let x = Math.ceil(b.minX / stepX) * stepX; x <= b.maxX; x += stepX) {
-      const [sx] = projector.project({ x, y: b.maxY });
-      ctx.beginPath();
-      ctx.moveTo(sx, PADDING);
-      ctx.lineTo(sx, HEIGHT - PADDING);
-      ctx.stroke();
-      ctx.textAlign = "center";
-      ctx.fillText(String(Math.round(x)), sx, HEIGHT - PADDING + 16);
-    }
-    for (let y = Math.ceil(b.minY / stepY) * stepY; y <= b.maxY; y += stepY) {
-      const [, sy] = projector.project({ x: b.minX, y });
-      ctx.beginPath();
-      ctx.moveTo(PADDING, sy);
-      ctx.lineTo(WIDTH - PADDING, sy);
-      ctx.stroke();
-      ctx.save();
-      ctx.translate(PADDING - 8, sy);
-      ctx.rotate(-Math.PI / 2);
-      ctx.textAlign = "center";
-      ctx.fillText(String(Math.round(y)), 0, 0);
-      ctx.restore();
-    }
-  } else {
-    for (let i = 1; i < 8; i++) {
-      const gx = PADDING + ((WIDTH - 2 * PADDING) * i) / 8;
-      ctx.beginPath();
-      ctx.moveTo(gx, PADDING);
-      ctx.lineTo(gx, HEIGHT - PADDING);
-      ctx.stroke();
-    }
-    for (let i = 1; i < 5; i++) {
-      const gy = PADDING + ((HEIGHT - 2 * PADDING) * i) / 5;
-      ctx.beginPath();
-      ctx.moveTo(PADDING, gy);
-      ctx.lineTo(WIDTH - PADDING, gy);
-      ctx.stroke();
-    }
+  const b = projector.bounds;
+  const stepX = niceStep(b.maxX - b.minX, 5);
+  const stepY = niceStep(b.maxY - b.minY, 5);
+  ctx.font = `10px ${monoFamily}`;
+  ctx.fillStyle = THEME.label;
+  for (let x = Math.ceil(b.minX / stepX) * stepX; x <= b.maxX; x += stepX) {
+    const [sx] = projector.project({ x, y: b.maxY });
+    ctx.beginPath();
+    ctx.moveTo(sx, PADDING);
+    ctx.lineTo(sx, HEIGHT - PADDING);
+    ctx.stroke();
+    ctx.textAlign = "center";
+    ctx.fillText(String(Math.round(x)), sx, HEIGHT - PADDING + 16);
   }
+  for (let y = Math.ceil(b.minY / stepY) * stepY; y <= b.maxY; y += stepY) {
+    const [, sy] = projector.project({ x: b.minX, y });
+    ctx.beginPath();
+    ctx.moveTo(PADDING, sy);
+    ctx.lineTo(WIDTH - PADDING, sy);
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(PADDING - 8, sy);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center";
+    ctx.fillText(String(Math.round(y)), 0, 0);
+    ctx.restore();
+  }
+}
 
-  // Frame
+function drawPlaceholderGrid(ctx: CanvasRenderingContext2D) {
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = THEME.grid;
+  for (let i = 1; i < 8; i++) {
+    const gx = PADDING + ((WIDTH - 2 * PADDING) * i) / 8;
+    ctx.beginPath();
+    ctx.moveTo(gx, PADDING);
+    ctx.lineTo(gx, HEIGHT - PADDING);
+    ctx.stroke();
+  }
+  for (let i = 1; i < 5; i++) {
+    const gy = PADDING + ((HEIGHT - 2 * PADDING) * i) / 5;
+    ctx.beginPath();
+    ctx.moveTo(PADDING, gy);
+    ctx.lineTo(WIDTH - PADDING, gy);
+    ctx.stroke();
+  }
+}
+
+function drawFrame(ctx: CanvasRenderingContext2D) {
   ctx.strokeStyle = THEME.frame;
   ctx.lineWidth = 1;
   ctx.strokeRect(PADDING, PADDING, WIDTH - 2 * PADDING, HEIGHT - 2 * PADDING);
+}
 
-  if (!hasPoly || !polygon) return;
-
-  // Site polygon
+function drawPolygon(
+  ctx: CanvasRenderingContext2D,
+  polygon: Point[],
+  projector: Projector,
+  alpha = 1,
+) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
   ctx.beginPath();
   polygon.forEach((p, i) => {
     const [sx, sy] = projector.project(p);
@@ -158,7 +210,6 @@ function draw(
   ctx.lineWidth = 1.8;
   ctx.strokeStyle = THEME.line;
   ctx.stroke();
-
   // Vertices
   polygon.forEach((p) => {
     const [sx, sy] = projector.project(p);
@@ -167,8 +218,18 @@ function draw(
     ctx.fillStyle = THEME.line;
     ctx.fill();
   });
+  ctx.restore();
+}
 
-  // Placements
+function drawPlacements(
+  ctx: CanvasRenderingContext2D,
+  placements: Placement[],
+  projector: Projector,
+  hovered: number | null,
+  alpha = 1,
+) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
   placements.forEach((pl, idx) => {
     const [sx, sy] = projector.project(pl);
     const color = MEASUREMENT_TYPES[pl.typeIndex].color;
@@ -188,7 +249,14 @@ function draw(
     ctx.strokeStyle = THEME.ring;
     ctx.stroke();
   });
+  ctx.restore();
+}
 
+function drawScaleAndNorth(
+  ctx: CanvasRenderingContext2D,
+  projector: Projector,
+  monoFamily: string,
+) {
   // Scale bar (bottom-right)
   const targetPx = (WIDTH - 2 * PADDING) / 5;
   const dist = niceStep(targetPx / projector.scale, 1);
@@ -227,8 +295,92 @@ function draw(
   ctx.fillText("N", nx, ny - 4);
 }
 
+/** The full, non-animated render (the original `draw`). */
+function drawStatic(
+  ctx: CanvasRenderingContext2D,
+  polygon: Point[] | null,
+  placements: Placement[],
+  projector: Projector,
+  hovered: number | null,
+  monoFamily: string,
+) {
+  const hasPoly = !!polygon && polygon.length >= 2;
+  drawBackground(ctx);
+  if (hasPoly) drawGraticule(ctx, projector, monoFamily);
+  else drawPlaceholderGrid(ctx);
+  drawFrame(ctx);
+  if (!hasPoly || !polygon) return;
+  drawPolygon(ctx, polygon, projector);
+  drawPlacements(ctx, placements, projector, hovered);
+  drawScaleAndNorth(ctx, projector, monoFamily);
+}
+
+function drawGridDots(
+  ctx: CanvasRenderingContext2D,
+  points: Point[],
+  projector: Projector,
+  colorFor: (p: Point) => string,
+  alpha: number,
+  revealX: number | null,
+) {
+  if (alpha <= 0) return;
+  const b = projector.bounds;
+  const spanX = b.maxX - b.minX || 1;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  for (const p of points) {
+    if (revealX != null && (p.x - b.minX) / spanX > revealX) continue;
+    const [sx, sy] = projector.project(p);
+    ctx.fillStyle = colorFor(p);
+    ctx.beginPath();
+    ctx.arc(sx, sy, GRID_DOT_R, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawCentroids(
+  ctx: CanvasRenderingContext2D,
+  centroids: Point[],
+  projector: Projector,
+  radius: number,
+  alpha: number,
+) {
+  if (alpha <= 0 || radius <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  centroids.forEach((c, i) => {
+    const [sx, sy] = projector.project(c);
+    ctx.beginPath();
+    ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+    ctx.fillStyle = clusterColor(i);
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = THEME.ring;
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function prepareCanvas(
+  canvas: HTMLCanvasElement,
+): { ctx: CanvasRenderingContext2D; mono: string } | null {
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== WIDTH * dpr) {
+    canvas.width = WIDTH * dpr;
+    canvas.height = HEIGHT * dpr;
+  }
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const mono =
+    getComputedStyle(canvas).getPropertyValue("--font-ibm-plex-mono").trim() ||
+    "monospace";
+  return { ctx, mono };
+}
+
 export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SitePlot(
-  { polygon, placements = [] },
+  { polygon, placements = [], animation = null, animate = false, onAnimationDone },
   ref,
 ) {
   const { t } = useI18n();
@@ -238,6 +390,12 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
 
   const projector = useMemo(() => makeProjector(polygon), [polygon]);
   const hasPolygon = !!polygon && polygon.length >= 2;
+
+  // Keep the completion callback in a ref so the animation effect doesn't restart
+  // when the parent passes a new function identity.
+  const doneRef = useRef(onAnimationDone);
+  doneRef.current = onAnimationDone;
+  const skipRef = useRef(false);
 
   useImperativeHandle(ref, () => ({
     toPng: () => canvasRef.current?.toDataURL("image/png") ?? null,
@@ -255,26 +413,129 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     };
   }, []);
 
+  // Static render — used whenever we're not playing the k-means animation.
   useEffect(() => {
+    if (animate) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    if (canvas.width !== WIDTH * dpr) {
-      canvas.width = WIDTH * dpr;
-      canvas.height = HEIGHT * dpr;
+    const prepared = prepareCanvas(canvas);
+    if (!prepared) return;
+    drawStatic(prepared.ctx, polygon, placements, projector, hovered, prepared.mono);
+  }, [animate, polygon, placements, projector, hovered, fontsReady]);
+
+  // K-means animation timeline.
+  useEffect(() => {
+    if (!animate) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const prepared = prepareCanvas(canvas);
+    if (!prepared) return;
+    const { ctx, mono } = prepared;
+
+    const finish = () => {
+      drawStatic(ctx, polygon, placements, projector, hovered, mono);
+      doneRef.current?.();
+    };
+
+    const frames = animation?.frames ?? [];
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!polygon || frames.length === 0 || reduceMotion) {
+      finish();
+      return;
     }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const monoFamily =
-      getComputedStyle(canvas).getPropertyValue("--font-ibm-plex-mono").trim() ||
-      "monospace";
-    draw(ctx, polygon, placements, projector, hovered, monoFamily);
-  }, [polygon, placements, projector, hovered, fontsReady]);
+
+    const gridPoints = animation!.gridPoints;
+    const stepCount = Math.max(1, frames.length - 1);
+    const stepMs = Math.min(
+      STEP_MAX_MS,
+      Math.max(STEP_MIN_MS, ITER_TARGET_MS / stepCount),
+    );
+    const iterMs = stepMs * stepCount;
+    const sweepEnd = SWEEP_MS;
+    const seedEnd = sweepEnd + SEED_MS;
+    const iterEnd = seedEnd + iterMs;
+    const revealEnd = iterEnd + REVEAL_MS;
+
+    skipRef.current = false;
+    let raf = 0;
+    let start = 0;
+
+    const render = (now: number) => {
+      if (!start) start = now;
+      let elapsed = now - start;
+      if (skipRef.current) elapsed = revealEnd;
+
+      drawBackground(ctx);
+      drawGraticule(ctx, projector, mono);
+      drawPolygon(ctx, polygon, projector);
+
+      if (elapsed < sweepEnd) {
+        // Stage 1: lay the interior grid over the area, left → right.
+        const revealX = elapsed / SWEEP_MS;
+        drawGridDots(ctx, gridPoints, projector, () => THEME.dot, 1, revealX);
+      } else if (elapsed < seedEnd) {
+        // Stage 2: drop the initial centroids.
+        const f = easeInOut((elapsed - sweepEnd) / SEED_MS);
+        drawGridDots(ctx, gridPoints, projector, () => THEME.dot, 1, null);
+        drawCentroids(ctx, frames[0], projector, CENTROID_R * f, f);
+      } else if (elapsed < iterEnd) {
+        // Stage 3: iterate — color by nearest centroid, glide centroids to means.
+        const local = elapsed - seedEnd;
+        const idx = Math.min(stepCount - 1, Math.floor(local / stepMs));
+        const f = easeInOut((local - idx * stepMs) / stepMs);
+        const from = frames[idx];
+        const to = frames[idx + 1] ?? frames[idx];
+        const cur = from.map((c, i) => ({
+          x: c.x + (to[i].x - c.x) * f,
+          y: c.y + (to[i].y - c.y) * f,
+        }));
+        drawGridDots(
+          ctx,
+          gridPoints,
+          projector,
+          (p) => clusterColor(nearestIndex(p, cur)),
+          1,
+          null,
+        );
+        drawCentroids(ctx, cur, projector, CENTROID_R, 1);
+      } else if (elapsed < revealEnd) {
+        // Stage 4: fade grid out, crossfade centroids → type-colored placements.
+        const f = easeInOut((elapsed - iterEnd) / REVEAL_MS);
+        const final = frames[frames.length - 1];
+        drawGridDots(
+          ctx,
+          gridPoints,
+          projector,
+          (p) => clusterColor(nearestIndex(p, final)),
+          1 - f,
+          null,
+        );
+        drawCentroids(ctx, final, projector, CENTROID_R, 1 - f);
+        drawPlacements(ctx, placements, projector, null, f);
+        drawScaleAndNorth(ctx, projector, mono);
+      }
+
+      drawFrame(ctx);
+
+      if (elapsed >= revealEnd) {
+        finish();
+        return;
+      }
+      raf = requestAnimationFrame(render);
+    };
+
+    raf = requestAnimationFrame(render);
+    return () => cancelAnimationFrame(raf);
+    // `hovered` is intentionally excluded: it never changes while animating and
+    // including it would restart the timeline.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [animate, animation, polygon, placements, projector]);
 
   const onMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!placements.length) return;
+      if (animate || !placements.length) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
@@ -292,7 +553,7 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
       });
       setHovered(best);
     },
-    [placements, projector],
+    [animate, placements, projector],
   );
 
   const hoveredPlacement = hovered != null ? placements[hovered] : null;
@@ -305,9 +566,12 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
         style={{ width: "100%", height: "auto", display: "block" }}
         onMouseMove={onMove}
         onMouseLeave={() => setHovered(null)}
+        onClick={() => {
+          if (animate) skipRef.current = true;
+        }}
       />
 
-      {!hasPolygon && (
+      {!hasPolygon && !animate && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center p-5 text-center">
           <div className="font-mono text-xs uppercase tracking-[0.14em] text-[#bbae96]">
             {t.noArea}
@@ -316,6 +580,18 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
             {t.noAreaHint}
           </div>
         </div>
+      )}
+
+      {animate && (
+        <button
+          type="button"
+          onClick={() => {
+            skipRef.current = true;
+          }}
+          className="absolute bottom-3 left-3 z-10 cursor-pointer rounded-full border border-hairline-2 bg-surface/90 px-[13px] py-[5px] font-mono text-[11.5px] font-semibold text-ink-2 backdrop-blur transition hover:text-ink"
+        >
+          {t.skipAnimation}
+        </button>
       )}
 
       {hoveredPlacement && hoveredScreen && (

@@ -1,11 +1,26 @@
 import { sampleInteriorGrid } from "./geometry";
-import { kMeansCenters } from "./kmeans";
+import { kMeansWithHistory } from "./kmeans";
 import { optimize } from "./optimize";
-import type { ComputeInput, ComputeResult, ComputePhase, Placement } from "./types";
+import type {
+  ComputeInput,
+  ComputeResult,
+  ComputePhase,
+  KMeansAnimation,
+  Placement,
+} from "./types";
 
 export interface ComputeCallbacks {
   onProgress?: (phase: ComputePhase, fraction: number) => void;
 }
+
+/**
+ * Resolution of the (separate) coarse interior grid shown during the animation.
+ * Kept ≤ 49 so the worst case — a polygon that fills its whole bounding box —
+ * still yields at most 50×50 = 2500 dots, cheap to redraw every frame. This is a
+ * clean rectangular lattice (unlike thinning the dense compute grid, which aliases
+ * into diagonal moiré bands because interior columns have unequal heights).
+ */
+const ANIMATION_GRID_RESOLUTION = 48;
 
 /**
  * Full pipeline, mirroring the legacy `run`:
@@ -34,8 +49,12 @@ export function compute(input: ComputeInput, callbacks: ComputeCallbacks = {}): 
   }
 
   callbacks.onProgress?.("kmeans", 0);
-  const centers = kMeansCenters(candidates, total);
+  const { centers, frames } = kMeansWithHistory(candidates, total);
   callbacks.onProgress?.("kmeans", 1);
+
+  const animation: KMeansAnimation | undefined = input.captureAnimation
+    ? { gridPoints: sampleInteriorGrid(polygon, ANIMATION_GRID_RESOLUTION), frames }
+    : undefined;
 
   const { assignment, score } = optimize(centers, counts, {
     iterations,
@@ -61,5 +80,5 @@ export function compute(input: ComputeInput, callbacks: ComputeCallbacks = {}): 
     }
   }
 
-  return { placements, score, candidateCount: candidates.length };
+  return { placements, score, candidateCount: candidates.length, animation };
 }

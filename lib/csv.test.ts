@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
-import { parseAreaCsv, placementsToCsv } from "./csv";
-import type { Placement } from "./algorithm/types";
+import { parseAreaCsv, placementsToCsv, polygonToCsv } from "./csv";
+import type { Placement, Point } from "./algorithm/types";
 
 function csvFile(content: string): File {
   return new File([content], "area.csv", { type: "text/csv" });
@@ -33,6 +33,27 @@ describe("placementsToCsv", () => {
 
   it("returns an empty string for no placements", () => {
     expect(placementsToCsv([])).toBe("");
+  });
+});
+
+describe("polygonToCsv", () => {
+  it("emits a Position X/Position Y header that parseAreaCsv round-trips", async () => {
+    const polygon: Point[] = [
+      { x: 155000, y: 463000 },
+      { x: 155180.5, y: 463040.2 },
+      { x: 155360, y: 463010 },
+      { x: 154940, y: 463080 },
+    ];
+    const csv = polygonToCsv(polygon);
+    expect(csv.split("\n")[0]).toBe("Position X,Position Y");
+
+    const file = csvFile(csv);
+    const { polygon: parsed } = await parseAreaCsv(file);
+    expect(parsed).toHaveLength(polygon.length);
+    parsed.forEach((p, i) => {
+      expect(p.x).toBeCloseTo(polygon[i].x, 1);
+      expect(p.y).toBeCloseTo(polygon[i].y, 1);
+    });
   });
 });
 
