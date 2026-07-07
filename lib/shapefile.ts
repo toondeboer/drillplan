@@ -71,7 +71,9 @@ export async function parseAreaShapefile(shp: File): Promise<ParsedArea> {
   }
 
   if (!rings.length) {
-    throw new Error("No polygon found in the shapefile.");
+    throw new Error(
+      "This shapefile is empty (no features) — check the layer has geometry before exporting.",
+    );
   }
 
   // Take the largest ring by absolute area as the site outline.

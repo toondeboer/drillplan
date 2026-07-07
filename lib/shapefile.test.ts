@@ -26,6 +26,12 @@ describe("parseAreaShapefile", () => {
     expect(polygon.every((p) => p.y > 490000 && p.y < 500000)).toBe(true);
   });
 
+  it("rejects an empty shapefile (valid header, zero features)", async () => {
+    await expect(parseAreaShapefile(shpFixture("shape2.shp"))).rejects.toThrow(
+      /empty/,
+    );
+  });
+
   it("rejects a buffer that isn't a shapefile", async () => {
     const file = new File([new Uint8Array(200)], "not.shp");
     await expect(parseAreaShapefile(file)).rejects.toThrow(/valid shapefile/);
