@@ -9,16 +9,26 @@ import { ProgressBar } from "@/components/ProgressBar";
 import { SitePlot, type SitePlotHandle } from "@/components/SitePlot";
 import { downloadFile, parseAreaCsv, placementsToCsv, polygonToCsv } from "@/lib/csv";
 import { generateExamplePolygon } from "@/lib/exampleArea";
+import { optimizeRoute } from "@/lib/algorithm/route";
 import {
   type ComputeInput,
   type ComputeResult,
   type Placement,
   type Point,
+  type RouteOptions,
   type WorkerOutMessage,
 } from "@/lib/algorithm/types";
 import { format, useI18n } from "@/lib/i18n";
 
 type Status = "idle" | "computing" | "animating" | "done" | "error";
+type PickMode = "start" | "end" | null;
+
+/** Fresh route: a round trip starting at the north-most hole, end chosen automatically. */
+const DEFAULT_ROUTE_OPTIONS: RouteOptions = {
+  startIndex: null,
+  endIndex: null,
+  roundTrip: true,
+};
 
 function baseName(name: string): string {
   return name.replace(/\.[^.]+$/, "") || "drillplan";
@@ -58,6 +68,15 @@ function CardTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Pill-button styling for the route controls, mirroring the Legend pills. */
+function routePill(active: boolean, disabled = false): string {
+  return `inline-flex items-center gap-1.5 rounded-full border px-[11px] py-1 font-mono text-xs font-semibold transition ${
+    active
+      ? "border-clay bg-clay-soft-bg text-clay"
+      : "border-hairline-2 bg-surface text-ink-2"
+  } ${disabled ? "cursor-not-allowed opacity-45" : "cursor-pointer hover:text-ink"}`;
+}
+
 export default function Home() {
   const { t } = useI18n();
 
@@ -69,10 +88,21 @@ export default function Home() {
   const [result, setResult] = useState<ComputeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [highlightedType, setHighlightedType] = useState<number | null>(null);
+  const [routeOptions, setRouteOptions] = useState<RouteOptions>(DEFAULT_ROUTE_OPTIONS);
+  const [pickMode, setPickMode] = useState<PickMode>(null);
 
   const plotRef = useRef<SitePlotHandle>(null);
 
   const total = counts.reduce((a, b) => a + b, 0);
+
+  // Order the holes into the shortest drilling route (Traveling Salesman). Cheap for these
+  // hole counts, so it re-runs on the client whenever the start/end/round-trip changes —
+  // no need to re-run the k-means worker.
+  const routed = useMemo(
+    () => (result ? optimizeRoute(result.placements, routeOptions) : null),
+    [result, routeOptions],
+  );
+  const routedPlacements = routed?.placements;
 
   const spread = useMemo(
     () => (result ? minSameTypeDistance(result.placements) : null),
@@ -84,6 +114,8 @@ export default function Home() {
     setResult(null);
     setStatus("idle");
     setHighlightedType(null);
+    setRouteOptions(DEFAULT_ROUTE_OPTIONS);
+    setPickMode(null);
     try {
       const { polygon } = await parseAreaCsv(file);
       setPolygon(polygon);
@@ -100,6 +132,8 @@ export default function Home() {
     setResult(null);
     setStatus("idle");
     setHighlightedType(null);
+    setRouteOptions(DEFAULT_ROUTE_OPTIONS);
+    setPickMode(null);
     setPolygon(generateExamplePolygon());
     setFileName("example-site.csv");
   }, []);
@@ -114,6 +148,8 @@ export default function Home() {
     setError(null);
     setResult(null);
     setHighlightedType(null);
+    setRouteOptions(DEFAULT_ROUTE_OPTIONS);
+    setPickMode(null);
 
     const worker = new Worker(
       new URL("../workers/compute.worker.ts", import.meta.url),
@@ -143,18 +179,45 @@ export default function Home() {
   }, [polygon, counts, total]);
 
   const handleDownloadCsv = useCallback(() => {
-    if (!result) return;
-    downloadFile(`${baseName(fileName)}_result.csv`, placementsToCsv(result.placements));
-  }, [result, fileName]);
+    if (!routedPlacements) return;
+    downloadFile(`${baseName(fileName)}_result.csv`, placementsToCsv(routedPlacements));
+  }, [routedPlacements, fileName]);
 
   const handleAnimationDone = useCallback(() => setStatus("done"), []);
 
   const handleReplay = useCallback(() => {
     if (result?.animation) {
       setHighlightedType(null);
+      setPickMode(null);
       setStatus("animating");
     }
   }, [result]);
+
+  // Map a clicked hole (routed index) back to its stable original index, then set it as the
+  // route's start or end. The route re-optimizes instantly via the `routed` memo.
+  const handlePickPoint = useCallback(
+    (routedIndex: number) => {
+      setRouteOptions((opts) => {
+        if (!routed || !pickMode) return opts;
+        const originalIndex = routed.order[routedIndex];
+        return pickMode === "start"
+          ? { ...opts, startIndex: originalIndex }
+          : { ...opts, endIndex: originalIndex };
+      });
+      setPickMode(null);
+    },
+    [routed, pickMode],
+  );
+
+  const toggleRoundTrip = useCallback(() => {
+    setRouteOptions((opts) => ({ ...opts, roundTrip: !opts.roundTrip }));
+    setPickMode((m) => (m === "end" ? null : m)); // "end" is meaningless on a round trip
+  }, []);
+
+  const resetRoute = useCallback(() => {
+    setRouteOptions((opts) => ({ ...opts, startIndex: null, endIndex: null }));
+    setPickMode(null);
+  }, []);
 
   const toggleHighlight = useCallback((typeIndex: number) => {
     setHighlightedType((cur) => (cur === typeIndex ? null : typeIndex));
@@ -241,6 +304,8 @@ export default function Home() {
                     setResult(null);
                     setStatus("idle");
                     setError(null);
+                    setRouteOptions(DEFAULT_ROUTE_OPTIONS);
+                    setPickMode(null);
                   }}
                   className="cursor-pointer text-[13px] font-medium text-ink-3 transition hover:text-ink"
                 >
@@ -339,18 +404,21 @@ export default function Home() {
             <SitePlot
               ref={plotRef}
               polygon={polygon}
-              placements={result?.placements}
+              placements={routedPlacements}
               animation={result?.animation ?? null}
               animate={status === "animating"}
               onAnimationDone={handleAnimationDone}
               highlightType={highlightedType}
+              route={routed}
+              pickMode={status === "done" ? pickMode : null}
+              onPickPoint={handlePickPoint}
             />
 
-            {status === "done" && result && (
+            {status === "done" && result && routed && (
               <>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2.5">
                   <Legend
-                    placements={result.placements}
+                    placements={routed.placements}
                     activeType={highlightedType}
                     onToggleType={toggleHighlight}
                   />
@@ -361,6 +429,62 @@ export default function Home() {
                     </span>
                   </div>
                 </div>
+
+                {/* Drilling route (Traveling Salesman) controls */}
+                <div className="mt-3 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-[13px]">
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
+                        {t.routeTitle}
+                      </span>
+                      <span className="font-mono text-[13px] font-semibold text-ink">
+                        {`${Math.round(routed.length).toLocaleString()} m`}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-[7px]">
+                      <button
+                        type="button"
+                        aria-pressed={routeOptions.roundTrip}
+                        onClick={toggleRoundTrip}
+                        className={routePill(routeOptions.roundTrip)}
+                      >
+                        ↺ {t.roundTrip}
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={pickMode === "start"}
+                        onClick={() => setPickMode((m) => (m === "start" ? null : "start"))}
+                        className={routePill(pickMode === "start")}
+                      >
+                        {t.setStart}
+                        {routeOptions.startIndex != null ? " ✓" : ""}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={routeOptions.roundTrip}
+                        aria-pressed={pickMode === "end"}
+                        onClick={() => setPickMode((m) => (m === "end" ? null : "end"))}
+                        className={routePill(pickMode === "end", routeOptions.roundTrip)}
+                      >
+                        {t.setEnd}
+                        {!routeOptions.roundTrip && routeOptions.endIndex != null ? " ✓" : ""}
+                      </button>
+                      {(routeOptions.startIndex != null || routeOptions.endIndex != null) && (
+                        <button
+                          type="button"
+                          onClick={resetRoute}
+                          className="cursor-pointer px-1 font-mono text-xs font-semibold text-ink-3 transition hover:text-ink"
+                        >
+                          {t.resetRoute}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {pickMode && (
+                    <p className="mt-2 font-mono text-[12px] text-clay">{t.pickHint}</p>
+                  )}
+                </div>
+
                 <div className="mt-4 flex gap-[11px]">
                   <button
                     type="button"

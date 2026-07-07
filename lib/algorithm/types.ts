@@ -60,6 +60,40 @@ export interface ComputeResult {
   animation?: KMeansAnimation;
 }
 
+/** How to order holes into the drilling route (Traveling Salesman). */
+export interface RouteOptions {
+  /** Index (into the input placements) of the hole to start at. Null ⇒ north-most. */
+  startIndex: number | null;
+  /** Index of the hole to end at. Null ⇒ chosen automatically. Ignored on round trips. */
+  endIndex: number | null;
+  /** When true, the route returns to the start (a closed loop). */
+  roundTrip: boolean;
+}
+
+/**
+ * The result of ordering holes into the shortest drilling route. `placements` are
+ * reordered along the route and renumbered "001", "002", … so the CSV is ready to drill
+ * top-to-bottom. `steps`/`lengths` capture the algorithm's progress for the animation.
+ */
+export interface RoutePlan {
+  /** Holes in visiting order, renumbered sequentially. */
+  placements: Placement[];
+  /** order[i] = index of the i-th visited hole in the original input array. */
+  order: number[];
+  /** Total route length (metres), matching lengths[lengths.length - 1]. */
+  length: number;
+  /** Whether the route closes back to the start. */
+  roundTrip: boolean;
+  /**
+   * Visiting orders (each an array of original indices) captured as the algorithm ran:
+   * steps[0] is the nearest-neighbor draft, one snapshot per accepted 2-opt swap, and the
+   * last entry is the final order. Used to animate construction then untangling.
+   */
+  steps: number[][];
+  /** Total route length after each step; non-increasing. */
+  lengths: number[];
+}
+
 export type ComputePhase = "grid" | "kmeans" | "optimize";
 
 export interface ProgressMessage {

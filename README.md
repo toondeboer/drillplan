@@ -30,8 +30,18 @@ your machine and there is no backend to maintain.
    with random restarts) to minimize an *inverse-distance energy* — close same-type pairs
    are penalized hardest — so each type ends up spread evenly with a large minimum
    separation rather than just pushed toward the site edges.
-4. **Output.** A color-coded interactive map, a downloadable result CSV
-   (`id, x, y, 0.0, type`), and a PNG of the map.
+4. **Order the drilling route.** In the field the holes are drilled one-by-one down the
+   list, so the chosen holes are ordered into the shortest travel route — the **Traveling
+   Salesman Problem**. DrillPlan builds a **nearest-neighbor** route (greedily hop to the
+   closest unvisited hole), then improves it with **2-opt** (cut two crossing edges and
+   reconnect them so they uncross, repeating until no swap shortens the total). You can pick
+   the start hole, optionally fix an end, and toggle a round trip; the default is a round
+   trip from the north-most hole. This stage is **animated** straight after k-means — the
+   greedy build, then the 2-opt untangling with a live length readout — as one continuous
+   clip. (These are classical optimization heuristics, not machine learning.)
+5. **Output.** A color-coded interactive map showing the numbered route, a downloadable
+   result CSV (`id, x, y, 0.0, type`) **ordered along the route** so it can be drilled
+   top-to-bottom, and a PNG of the map.
 
 The heavy computation runs in a **Web Worker**, so the UI stays responsive and shows a
 progress bar.
@@ -44,6 +54,8 @@ progress bar.
 - A hand-rolled **K-Means++** clusterer (`lib/algorithm/kmeans.ts`) that records the
   centroids at every iteration — this both places the holes and drives the live
   clustering animation, with no third-party clustering dependency
+- A hand-rolled **Traveling Salesman** router (`lib/algorithm/route.ts`) — nearest-neighbor
+  construction + 2-opt improvement — that records each step to drive the route animation
 - A hand-rolled ray-casting point-in-polygon test (`lib/algorithm/geometry.ts`)
 - Bilingual UI (Dutch / English)
 
@@ -52,7 +64,7 @@ progress bar.
 ```
 app/                 Next.js pages (single-page tool)
 components/          UI: upload, plot, controls, legend, language toggle
-lib/algorithm/       geometry, kmeans, optimize, compute  (the ported algorithm)
+lib/algorithm/       geometry, kmeans, optimize, route, compute  (the ported algorithm)
 lib/csv.ts           CSV parse + result/example export
 lib/exampleArea.ts   random example-area generator (Try an example / Download example CSV)
 lib/i18n.tsx         NL/EN strings + context
@@ -80,7 +92,9 @@ npm run lint
 Open the app and click **Try an example** — it generates a fresh, randomly-shaped site
 outline each time (or use **Download example CSV** to grab a sample input file and see the
 expected format). Set how many holes you want per type and press **Calculate** to watch the
-clustering animation. Hover the points to inspect them, then download the CSV or image.
+clustering animation flow into the drilling-route animation. Adjust the route's start/end
+or the round-trip toggle, hover the points to inspect them, then download the route-ordered
+CSV or the map image.
 
 ## Input format
 

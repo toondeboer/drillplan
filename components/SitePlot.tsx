@@ -15,6 +15,7 @@ import {
   type KMeansAnimation,
   type Placement,
   type Point,
+  type RoutePlan,
 } from "@/lib/algorithm/types";
 import { useI18n } from "@/lib/i18n";
 
@@ -42,8 +43,26 @@ const STEP_MIN_MS = 90;
 const STEP_MAX_MS = 360;
 const REVEAL_MS = 650; // fade grid out, color into the final result
 
+// Route (Traveling Salesman) animation, played straight after the k-means reveal.
+const ROUTE_MARK_MS = 480; // pulse the start hole before building
+const ROUTE_BUILD_TARGET_MS = 1900; // budget for the greedy nearest-neighbor build
+const ROUTE_HOP_MIN_MS = 70;
+const ROUTE_HOP_MAX_MS = 260;
+const ROUTE_OPT_TARGET_MS = 1700; // budget for the 2-opt untangling
+const ROUTE_OPT_MIN_MS = 120;
+const ROUTE_OPT_MAX_MS = 520;
+const ROUTE_SETTLE_MS = 620; // hold the finished route before going static
+
 const CENTROID_R = 7;
 const GRID_DOT_R = 1.7;
+
+/** Route path + drill-head + endpoint marker colors (kept in the paper palette). */
+const ROUTE = {
+  line: "rgba(47,42,30,0.55)",
+  head: "#bd5a2e", // clay drill head
+  start: "#bd5a2e", // clay start ring
+  end: "#2f6b73", // slate-teal end ring
+} as const;
 
 export interface SitePlotHandle {
   toPng: () => string | null;
@@ -59,6 +78,11 @@ interface SitePlotProps {
   onAnimationDone?: () => void;
   /** When set, only placements of this measurement-type index are emphasized. */
   highlightType?: number | null;
+  /** The drilling route to overlay + animate. `placements` must already be its order. */
+  route?: RoutePlan | null;
+  /** When set, clicking a hole reports its index via `onPickPoint` (start/end selection). */
+  pickMode?: "start" | "end" | null;
+  onPickPoint?: (placementIndex: number) => void;
 }
 
 interface Projector {
@@ -311,6 +335,7 @@ function drawStatic(
   hovered: number | null,
   monoFamily: string,
   highlightType: number | null = null,
+  route: RoutePlan | null = null,
 ) {
   const hasPoly = !!polygon && polygon.length >= 2;
   drawBackground(ctx);
@@ -319,6 +344,17 @@ function drawStatic(
   drawFrame(ctx);
   if (!hasPoly || !polygon) return;
   drawPolygon(ctx, polygon, projector);
+  // The route sits under the holes so the type colors stay crisp; skip it while a single
+  // type is highlighted to keep that view uncluttered.
+  if (route && highlightType == null && placements.length >= 2) {
+    drawRoute(ctx, placements, projector, {
+      roundTrip: route.roundTrip,
+      monoFamily,
+      showNumbers: true,
+      startEnd: true,
+    });
+    drawRouteLength(ctx, route.length, monoFamily);
+  }
   drawPlacements(ctx, placements, projector, hovered, 1, highlightType);
   drawScaleAndNorth(ctx, projector, monoFamily);
 }
@@ -370,6 +406,159 @@ function drawCentroids(
   ctx.restore();
 }
 
+/** World-space length of the first `drawn` segments of an ordered node list. */
+function pathLengthWorld(nodes: Point[], roundTrip: boolean, drawn: number): number {
+  const n = nodes.length;
+  if (n < 2) return 0;
+  const total = roundTrip ? n : n - 1;
+  const d = Math.max(0, Math.min(total, drawn));
+  const full = Math.floor(d + 1e-9);
+  const frac = d - full;
+  const at = (i: number) => nodes[i % n];
+  let len = 0;
+  for (let k = 0; k < full; k++) {
+    len += Math.hypot(at(k + 1).x - at(k).x, at(k + 1).y - at(k).y);
+  }
+  if (frac > 0 && full < total) {
+    const a = at(full);
+    const b = at(full + 1);
+    len += Math.hypot(b.x - a.x, b.y - a.y) * frac;
+  }
+  return len;
+}
+
+/** Small "Route ≈ N m" readout in the top-left margin. */
+function drawRouteLength(ctx: CanvasRenderingContext2D, meters: number, monoFamily: string) {
+  ctx.save();
+  ctx.font = `600 11px ${monoFamily}`;
+  ctx.textAlign = "left";
+  ctx.fillStyle = THEME.label;
+  ctx.fillText(`Route ≈ ${Math.round(meters).toLocaleString()} m`, PADDING, PADDING - 9);
+  ctx.restore();
+}
+
+interface RouteDrawOpts {
+  roundTrip: boolean;
+  monoFamily: string;
+  /** How many segments of the route to draw (default: all). */
+  drawn?: number;
+  /** Draw a traveling drill-head marker at the growing tip. */
+  showHead?: boolean;
+  /** Draw sequence numbers on reached holes. */
+  showNumbers?: boolean;
+  /** Draw start (and, on open paths, end) rings. */
+  startEnd?: boolean;
+  alpha?: number;
+  /** Scale factor for the start ring (for the initial pulse). */
+  startScale?: number;
+}
+
+/**
+ * Draw the drilling route through `nodes` (in visiting order): the polyline up to the
+ * drawn length, an optional traveling drill-head, sequence numbers on reached holes, and
+ * distinct start / end rings. Reused by the animation and the static (PNG) render.
+ */
+function drawRoute(
+  ctx: CanvasRenderingContext2D,
+  nodes: Point[],
+  projector: Projector,
+  opts: RouteDrawOpts,
+) {
+  const n = nodes.length;
+  if (n === 0) return;
+  const {
+    roundTrip,
+    monoFamily,
+    drawn = Infinity,
+    showHead = false,
+    showNumbers = false,
+    startEnd = false,
+    alpha = 1,
+    startScale = 1,
+  } = opts;
+
+  const total = roundTrip ? n : n - 1;
+  const d = Math.max(0, Math.min(total, drawn));
+  const full = Math.floor(d + 1e-9);
+  const frac = d - full;
+  const P = nodes.map((nd) => projector.project(nd));
+  const at = (i: number) => P[i % n];
+
+  // Polyline + drill head.
+  if (n >= 2 && d > 0) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = ROUTE.line;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(at(0)[0], at(0)[1]);
+    for (let k = 1; k <= full; k++) ctx.lineTo(at(k)[0], at(k)[1]);
+    let head = at(full);
+    if (frac > 0 && full < total) {
+      const a = at(full);
+      const b = at(full + 1);
+      head = [a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac];
+      ctx.lineTo(head[0], head[1]);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    if (showHead && d < total - 1e-9) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(head[0], head[1], 5, 0, Math.PI * 2);
+      ctx.fillStyle = ROUTE.head;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = THEME.ring;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Sequence numbers on reached holes.
+  if (showNumbers) {
+    const reached = Math.min(n, full + 1);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = `600 10px ${monoFamily}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (let i = 0; i < reached; i++) {
+      const [sx, sy] = P[i];
+      const ly = sy - 11;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(251,248,241,0.92)";
+      ctx.strokeText(String(i + 1), sx, ly);
+      ctx.fillStyle = THEME.line;
+      ctx.fillText(String(i + 1), sx, ly);
+    }
+    ctx.restore();
+  }
+
+  // Start / end rings.
+  if (startEnd) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(P[0][0], P[0][1], 10 * startScale, 0, Math.PI * 2);
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = ROUTE.start;
+    ctx.stroke();
+    if (!roundTrip && n >= 2) {
+      ctx.beginPath();
+      ctx.setLineDash([3, 3]);
+      ctx.arc(P[n - 1][0], P[n - 1][1], 10, 0, Math.PI * 2);
+      ctx.strokeStyle = ROUTE.end;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
 function prepareCanvas(
   canvas: HTMLCanvasElement,
 ): { ctx: CanvasRenderingContext2D; mono: string } | null {
@@ -395,6 +584,9 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     animate = false,
     onAnimationDone,
     highlightType = null,
+    route = null,
+    pickMode = null,
+    onPickPoint,
   },
   ref,
 ) {
@@ -446,8 +638,9 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
       hovered,
       prepared.mono,
       highlightType,
+      route,
     );
-  }, [animate, polygon, placements, projector, hovered, fontsReady, highlightType]);
+  }, [animate, polygon, placements, projector, hovered, fontsReady, highlightType, route]);
 
   // K-means animation timeline.
   useEffect(() => {
@@ -459,7 +652,7 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     const { ctx, mono } = prepared;
 
     const finish = () => {
-      drawStatic(ctx, polygon, placements, projector, hovered, mono);
+      drawStatic(ctx, polygon, placements, projector, hovered, mono, null, route);
       doneRef.current?.();
     };
 
@@ -484,6 +677,43 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     const iterEnd = seedEnd + iterMs;
     const revealEnd = iterEnd + REVEAL_MS;
 
+    // Route (TSP) stages, played straight after the reveal. Placements are already in the
+    // route's visiting order, so a lookup by original index lets us draw the recorded steps.
+    const routeReady =
+      !!route &&
+      route.placements.length >= 2 &&
+      placements.length >= 2 &&
+      route.order.length === placements.length;
+    const rRoundTrip = routeReady ? route!.roundTrip : false;
+    const rLengths = routeReady ? route!.lengths : [];
+    const rLength = routeReady ? route!.length : 0;
+    let stepNodes: Point[][] = [];
+    let nSeg = 0;
+    let hopMs = 0;
+    let optCount = 0;
+    let optStepMs = 0;
+    if (routeReady) {
+      const nodeAt: Point[] = new Array(route!.order.length);
+      route!.order.forEach((orig, i) => {
+        nodeAt[orig] = placements[i];
+      });
+      stepNodes = route!.steps.map((s) => s.map((o) => nodeAt[o]));
+      nSeg = rRoundTrip ? route!.order.length : route!.order.length - 1;
+      hopMs = Math.min(
+        ROUTE_HOP_MAX_MS,
+        Math.max(ROUTE_HOP_MIN_MS, ROUTE_BUILD_TARGET_MS / Math.max(1, nSeg)),
+      );
+      optCount = Math.max(0, route!.steps.length - 1);
+      optStepMs =
+        optCount > 0
+          ? Math.min(ROUTE_OPT_MAX_MS, Math.max(ROUTE_OPT_MIN_MS, ROUTE_OPT_TARGET_MS / optCount))
+          : 0;
+    }
+    const markEnd = revealEnd + (routeReady ? ROUTE_MARK_MS : 0);
+    const buildEnd = markEnd + hopMs * nSeg;
+    const optEnd = buildEnd + optStepMs * optCount;
+    const routeEnd = optEnd + (routeReady ? ROUTE_SETTLE_MS : 0);
+
     skipRef.current = false;
     let raf = 0;
     let start = 0;
@@ -491,7 +721,7 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     const render = (now: number) => {
       if (!start) start = now;
       let elapsed = now - start;
-      if (skipRef.current) elapsed = revealEnd;
+      if (skipRef.current) elapsed = routeEnd;
 
       drawBackground(ctx);
       drawGraticule(ctx, projector, mono);
@@ -541,11 +771,59 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
         drawCentroids(ctx, final, projector, CENTROID_R, 1 - f);
         drawPlacements(ctx, placements, projector, null, f);
         drawScaleAndNorth(ctx, projector, mono);
+      } else if (routeReady && elapsed < routeEnd) {
+        // Route stages: hold the finished holes, then build + untangle the route on top.
+        drawPlacements(ctx, placements, projector, null, 1);
+        drawScaleAndNorth(ctx, projector, mono);
+        const nn = stepNodes[0];
+        if (elapsed < markEnd) {
+          // Stage 5: pulse the start hole before setting off.
+          const f = easeInOut((elapsed - revealEnd) / ROUTE_MARK_MS);
+          drawRoute(ctx, nn, projector, {
+            roundTrip: rRoundTrip,
+            monoFamily: mono,
+            drawn: 0,
+            startEnd: true,
+            startScale: 0.6 + 0.4 * f,
+          });
+          drawRouteLength(ctx, 0, mono);
+        } else if (elapsed < buildEnd) {
+          // Stage 6: greedy nearest-neighbor build, hop by hop.
+          const drawn = Math.min(nSeg, (elapsed - markEnd) / hopMs);
+          drawRoute(ctx, nn, projector, {
+            roundTrip: rRoundTrip,
+            monoFamily: mono,
+            drawn,
+            showHead: true,
+            showNumbers: true,
+            startEnd: true,
+          });
+          drawRouteLength(ctx, pathLengthWorld(nn, rRoundTrip, drawn), mono);
+        } else if (elapsed < optEnd) {
+          // Stage 7: 2-opt untangling — step through improved orders, length ticking down.
+          const k = Math.min(optCount, Math.floor((elapsed - buildEnd) / optStepMs) + 1);
+          drawRoute(ctx, stepNodes[k], projector, {
+            roundTrip: rRoundTrip,
+            monoFamily: mono,
+            showNumbers: true,
+            startEnd: true,
+          });
+          drawRouteLength(ctx, rLengths[k], mono);
+        } else {
+          // Stage 8: settle on the final optimized route.
+          drawRoute(ctx, placements, projector, {
+            roundTrip: rRoundTrip,
+            monoFamily: mono,
+            showNumbers: true,
+            startEnd: true,
+          });
+          drawRouteLength(ctx, rLength, mono);
+        }
       }
 
       drawFrame(ctx);
 
-      if (elapsed >= revealEnd) {
+      if (elapsed >= routeEnd) {
         finish();
         return;
       }
@@ -557,7 +835,7 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     // `hovered` is intentionally excluded: it never changes while animating and
     // including it would restart the timeline.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animate, animation, polygon, placements, projector]);
+  }, [animate, animation, polygon, placements, projector, route]);
 
   const onMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -582,6 +860,33 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     [animate, placements, projector],
   );
 
+  const onClickCanvas = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (animate) {
+        skipRef.current = true;
+        return;
+      }
+      if (!pickMode || !onPickPoint || !placements.length) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const mx = ((e.clientX - rect.left) / rect.width) * WIDTH;
+      const my = ((e.clientY - rect.top) / rect.height) * HEIGHT;
+      let best: number | null = null;
+      let bestDist = 18 * 18;
+      placements.forEach((pl, idx) => {
+        const [sx, sy] = projector.project(pl);
+        const d = (sx - mx) ** 2 + (sy - my) ** 2;
+        if (d < bestDist) {
+          bestDist = d;
+          best = idx;
+        }
+      });
+      if (best != null) onPickPoint(best);
+    },
+    [animate, pickMode, onPickPoint, placements, projector],
+  );
+
   const hoveredPlacement = hovered != null ? placements[hovered] : null;
   const hoveredScreen = hoveredPlacement ? projector.project(hoveredPlacement) : null;
 
@@ -589,12 +894,15 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     <div className="relative w-full overflow-hidden rounded-[11px] border border-hairline bg-map-paper">
       <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: "auto", display: "block" }}
+        style={{
+          width: "100%",
+          height: "auto",
+          display: "block",
+          cursor: pickMode && !animate ? "crosshair" : "default",
+        }}
         onMouseMove={onMove}
         onMouseLeave={() => setHovered(null)}
-        onClick={() => {
-          if (animate) skipRef.current = true;
-        }}
+        onClick={onClickCanvas}
       />
 
       {!hasPolygon && !animate && (

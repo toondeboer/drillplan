@@ -48,6 +48,13 @@ export interface Dict {
   skipAnimation: string;
   replayAnimation: string;
 
+  routeTitle: string;
+  roundTrip: string;
+  setStart: string;
+  setEnd: string;
+  resetRoute: string;
+  pickHint: string;
+
   tipId: string;
 
   errorTitle: string;
@@ -96,6 +103,13 @@ const nl: Dict = {
   skipAnimation: "Overslaan",
   replayAnimation: "Opnieuw afspelen",
 
+  routeTitle: "Boorroute",
+  roundTrip: "Rondrit",
+  setStart: "Start kiezen",
+  setEnd: "Eind kiezen",
+  resetRoute: "Herstellen",
+  pickHint: "Klik op een boorpunt op de kaart.",
+
   tipId: "Nr.",
 
   errorTitle: "Er ging iets mis",
@@ -109,7 +123,7 @@ const nl: Dict = {
 
   aboutTitle: "Hoe werkt het",
   about:
-    "DrillPlan legt een raster over het terrein, kiest gelijkmatig verdeelde punten met K-Means en zoekt de verdeling waarbij metingen van hetzelfde type zo ver mogelijk uit elkaar liggen. Alles gebeurt lokaal — je bestand wordt nergens geüpload.",
+    "DrillPlan legt een raster over het terrein, kiest gelijkmatig verdeelde punten met K-Means en zoekt de verdeling waarbij metingen van hetzelfde type zo ver mogelijk uit elkaar liggen. Tot slot worden de boringen in de kortste boorroute gezet (het handelsreizigersprobleem), zodat je de lijst van boven naar beneden kunt afwerken. Alles gebeurt lokaal — je bestand wordt nergens geüpload.",
 };
 
 const en: Dict = {
@@ -149,6 +163,13 @@ const en: Dict = {
   skipAnimation: "Skip",
   replayAnimation: "Replay",
 
+  routeTitle: "Route",
+  roundTrip: "Round trip",
+  setStart: "Set start",
+  setEnd: "Set end",
+  resetRoute: "Reset",
+  pickHint: "Click a hole on the map.",
+
   tipId: "No.",
 
   errorTitle: "Something went wrong",
@@ -162,7 +183,7 @@ const en: Dict = {
 
   aboutTitle: "How it works",
   about:
-    "DrillPlan lays a grid over the site, picks evenly spread candidate points with K-Means, then searches type assignments so that same-type measurements sit as far apart as possible. Everything runs locally — your file is never uploaded.",
+    "DrillPlan lays a grid over the site, picks evenly spread candidate points with K-Means, then searches type assignments so that same-type measurements sit as far apart as possible. Finally it orders the holes into the shortest drilling route (the Traveling Salesman problem) so the CSV can be drilled top-to-bottom. Everything runs locally — your file is never uploaded.",
 };
 
 const dictionaries: Record<Language, Dict> = { nl, en };
