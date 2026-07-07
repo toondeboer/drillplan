@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { optimizeRoute, northernmostIndex } from "./route";
+import { optimizeRoute, orderNorthToSouth, northernmostIndex } from "./route";
 import type { Placement, RouteOptions } from "./types";
 
 /** Deterministic PRNG (mulberry32) so randomized tests are reproducible. */
@@ -24,7 +24,12 @@ function randomPlacements(rng: () => number, n: number): Placement[] {
   return makePlacements(coords);
 }
 
-const roundTrip: RouteOptions = { startIndex: null, endIndex: null, roundTrip: true };
+const roundTrip: RouteOptions = {
+  startIndex: null,
+  endIndex: null,
+  roundTrip: true,
+  numbering: "route",
+};
 
 describe("northernmostIndex", () => {
   it("returns the index of the largest-y placement", () => {
@@ -103,25 +108,45 @@ describe("optimizeRoute — endpoints", () => {
   const pts = randomPlacements(makeRng(55), 10);
 
   it("honors a fixed start on a round trip", () => {
-    const plan = optimizeRoute(pts, { startIndex: 4, endIndex: null, roundTrip: true });
+    const plan = optimizeRoute(pts, {
+      startIndex: 4,
+      endIndex: null,
+      roundTrip: true,
+      numbering: "route",
+    });
     expect(plan.order[0]).toBe(4);
     expect(plan.roundTrip).toBe(true);
   });
 
   it("honors a fixed start and end on an open path", () => {
-    const plan = optimizeRoute(pts, { startIndex: 2, endIndex: 7, roundTrip: false });
+    const plan = optimizeRoute(pts, {
+      startIndex: 2,
+      endIndex: 7,
+      roundTrip: false,
+      numbering: "route",
+    });
     expect(plan.order[0]).toBe(2);
     expect(plan.order[plan.order.length - 1]).toBe(7);
   });
 
   it("fixes the start but lets the end float when no end is given", () => {
-    const plan = optimizeRoute(pts, { startIndex: 3, endIndex: null, roundTrip: false });
+    const plan = optimizeRoute(pts, {
+      startIndex: 3,
+      endIndex: null,
+      roundTrip: false,
+      numbering: "route",
+    });
     expect(plan.order[0]).toBe(3);
     expect(plan.roundTrip).toBe(false);
   });
 
   it("ignores the end index on a round trip", () => {
-    const plan = optimizeRoute(pts, { startIndex: 1, endIndex: 9, roundTrip: true });
+    const plan = optimizeRoute(pts, {
+      startIndex: 1,
+      endIndex: 9,
+      roundTrip: true,
+      numbering: "route",
+    });
     expect(plan.order[0]).toBe(1);
     // On a loop the end is the start, not the requested end index.
     expect(plan.order).toContain(9);
@@ -162,5 +187,41 @@ describe("optimizeRoute — determinism & edge cases", () => {
     ]);
     const plan = optimizeRoute(pts, roundTrip);
     expect(plan.length).toBeCloseTo(4, 6);
+  });
+});
+
+describe("orderNorthToSouth", () => {
+  it("numbers holes strictly north→south (descending y), west→east on ties", () => {
+    // Input deliberately out of order; expect visiting order top-to-bottom.
+    const pts = makePlacements([
+      [5, 1], // south
+      [2, 9], // north, west of the other y=9
+      [8, 9], // north, east
+      [4, 5], // middle
+    ]);
+    const plan = orderNorthToSouth(pts);
+    expect(plan.order).toEqual([1, 2, 3, 0]);
+    expect(plan.placements.map((p) => p.id)).toEqual(["001", "002", "003", "004"]);
+    expect(plan.roundTrip).toBe(false);
+  });
+
+  it("reports the open-path walking length and a single step (no untangle)", () => {
+    const pts = makePlacements([
+      [0, 0],
+      [0, 10],
+      [0, 4],
+    ]);
+    const plan = orderNorthToSouth(pts);
+    // Order is y=10 → y=4 → y=0: distances 6 + 4 = 10.
+    expect(plan.length).toBeCloseTo(10, 6);
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.lengths).toEqual([plan.length]);
+  });
+
+  it("handles empty and single-hole inputs", () => {
+    expect(orderNorthToSouth([]).order).toEqual([]);
+    const one = orderNorthToSouth(makePlacements([[3, 3]]));
+    expect(one.placements[0].id).toBe("001");
+    expect(one.length).toBe(0);
   });
 });

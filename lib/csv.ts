@@ -1,5 +1,5 @@
 import Papa from "papaparse";
-import { MEASUREMENT_TYPES, type Placement, type Point } from "./algorithm/types";
+import { type DrillType, type Placement, type Point } from "./algorithm/types";
 
 export interface ParsedArea {
   polygon: Point[];
@@ -71,21 +71,22 @@ export function polygonToCsv(polygon: Point[]): string {
 }
 
 /**
- * Build the result CSV in the same format as the legacy script:
- * `id, x(4 decimals), y(4 decimals), 0.0, type` with no header row.
+ * Build the result CSV: a `NR,X,Y,Z,Type` header followed by one row per placement
+ * (`id, x(4 decimals), y(4 decimals), 0.0, type`). The type column uses each placement's
+ * drill-type code.
  */
-export function placementsToCsv(placements: Placement[]): string {
-  return placements
-    .map((p) =>
-      [
-        p.id,
-        p.x.toFixed(4),
-        p.y.toFixed(4),
-        "0.0",
-        MEASUREMENT_TYPES[p.typeIndex].code,
-      ].join(","),
-    )
-    .join("\n");
+export function placementsToCsv(placements: Placement[], drillTypes: DrillType[]): string {
+  const header = "NR,X,Y,Z,Type";
+  const rows = placements.map((p) =>
+    [
+      p.id,
+      p.x.toFixed(4),
+      p.y.toFixed(4),
+      "0.0",
+      drillTypes[p.typeIndex]?.code ?? "",
+    ].join(","),
+  );
+  return [header, ...rows].join("\n");
 }
 
 /** Trigger a client-side download of `content` as `filename`. */

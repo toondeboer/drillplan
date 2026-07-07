@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileUpload } from "@/components/FileUpload";
 import { Legend } from "@/components/Legend";
 import { LanguageToggle } from "@/components/LanguageToggle";
@@ -10,10 +10,13 @@ import { SitePlot, type SitePlotHandle } from "@/components/SitePlot";
 import { downloadFile, parseAreaCsv, placementsToCsv, polygonToCsv } from "@/lib/csv";
 import { parseAreaShapefile } from "@/lib/shapefile";
 import { generateExamplePolygon } from "@/lib/exampleArea";
-import { optimizeRoute } from "@/lib/algorithm/route";
+import { optimizeRoute, orderNorthToSouth } from "@/lib/algorithm/route";
 import {
+  DEFAULT_DRILL_TYPES,
+  DRILL_SYMBOLS,
   type ComputeInput,
   type ComputeResult,
+  type DrillType,
   type Placement,
   type Point,
   type RouteOptions,
@@ -30,7 +33,47 @@ const DEFAULT_ROUTE_OPTIONS: RouteOptions = {
   startIndex: null,
   endIndex: null,
   roundTrip: true,
+  numbering: "route",
 };
+
+/** Default hole counts, aligned with DEFAULT_DRILL_TYPES. */
+const DEFAULT_COUNTS = [5, 5, 5, 5, 5, 3];
+
+const DRILLS_STORAGE_KEY = "drillplan-drills";
+
+/** Parse a stored drill-types list, keeping only well-formed entries. Returns null if unusable. */
+function parseStoredDrillTypes(raw: string | null): DrillType[] | null {
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data)) return null;
+    const types: DrillType[] = [];
+    for (const d of data) {
+      if (
+        d &&
+        typeof d.id === "string" &&
+        typeof d.code === "string" &&
+        typeof d.color === "string" &&
+        DRILL_SYMBOLS.includes(d.symbol)
+      ) {
+        types.push({ id: d.id, code: d.code, color: d.color, symbol: d.symbol });
+      }
+    }
+    return types.length ? types : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Resize `counts` to `len`, keeping existing values and padding new slots with 0. */
+function fitCounts(counts: number[], len: number): number[] {
+  return Array.from({ length: len }, (_, i) => counts[i] ?? 0);
+}
+
+let drillIdCounter = 0;
+function newDrillId(): string {
+  return `drill-${Date.now().toString(36)}-${drillIdCounter++}`;
+}
 
 function baseName(name: string): string {
   return name.replace(/\.[^.]+$/, "") || "drillplan";
@@ -84,7 +127,25 @@ export default function Home() {
 
   const [polygon, setPolygon] = useState<Point[] | null>(null);
   const [fileName, setFileName] = useState<string>("");
-  const [counts, setCounts] = useState<number[]>([5, 3, 2, 4]);
+  const [drillTypes, setDrillTypes] = useState<DrillType[]>(DEFAULT_DRILL_TYPES);
+  const [counts, setCounts] = useState<number[]>(DEFAULT_COUNTS);
+
+  // Hydrate the persisted drill types after mount. The first render uses the built-in
+  // defaults so server and client markup match; reading localStorage during lazy init would
+  // touch `window` on the server and break SSR. Reconcile the counts length to the stored
+  // list. The one-time setState here is intentional, hence the rule suppression.
+  useEffect(() => {
+    const stored = parseStoredDrillTypes(window.localStorage.getItem(DRILLS_STORAGE_KEY));
+    if (!stored) return;
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setDrillTypes(stored);
+    setCounts((c) => fitCounts(c, stored.length));
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  const persistDrillTypes = useCallback((types: DrillType[]) => {
+    window.localStorage.setItem(DRILLS_STORAGE_KEY, JSON.stringify(types));
+  }, []);
 
   const [status, setStatus] = useState<Status>("idle");
   const [result, setResult] = useState<ComputeResult | null>(null);
@@ -100,10 +161,12 @@ export default function Home() {
   // Order the holes into the shortest drilling route (Traveling Salesman). Cheap for these
   // hole counts, so it re-runs on the client whenever the start/end/round-trip changes —
   // no need to re-run the k-means worker.
-  const routed = useMemo(
-    () => (result ? optimizeRoute(result.placements, routeOptions) : null),
-    [result, routeOptions],
-  );
+  const routed = useMemo(() => {
+    if (!result) return null;
+    return routeOptions.numbering === "northSouth"
+      ? orderNorthToSouth(result.placements)
+      : optimizeRoute(result.placements, routeOptions);
+  }, [result, routeOptions]);
   const routedPlacements = routed?.placements;
 
   const spread = useMemo(
@@ -192,8 +255,59 @@ export default function Home() {
 
   const handleDownloadCsv = useCallback(() => {
     if (!routedPlacements) return;
-    downloadFile(`${baseName(fileName)}_result.csv`, placementsToCsv(routedPlacements));
-  }, [routedPlacements, fileName]);
+    downloadFile(
+      `${baseName(fileName)}_result.csv`,
+      placementsToCsv(routedPlacements, drillTypes),
+    );
+  }, [routedPlacements, drillTypes, fileName]);
+
+  // Add a drill type (with a count of 0). Existing type indices are unchanged, so any current
+  // result stays valid — no recompute needed until the user gives it a count.
+  const addDrillType = useCallback(() => {
+    const palette = ["#7a9b57", "#4c78a8", "#9a5ea8", "#c26b3e", "#5a8a8f"];
+    setDrillTypes((types) => {
+      const next: DrillType[] = [
+        ...types,
+        {
+          id: newDrillId(),
+          code: `bo${String(types.length + 1).padStart(2, "0")}`,
+          color: palette[types.length % palette.length],
+          symbol: "circle",
+        },
+      ];
+      persistDrillTypes(next);
+      return next;
+    });
+    setCounts((c) => [...c, 0]);
+  }, [persistDrillTypes]);
+
+  // Delete a drill type. This shifts the remaining indices, so a stale result would mislabel
+  // holes — clear it and reset the route, mirroring the "Change file" reset.
+  const deleteDrillType = useCallback((index: number) => {
+    setDrillTypes((types) => {
+      if (types.length <= 1) return types;
+      const next = types.filter((_, i) => i !== index);
+      persistDrillTypes(next);
+      return next;
+    });
+    setCounts((c) => c.filter((_, i) => i !== index));
+    setResult(null);
+    setStatus("idle");
+    setError(null);
+    setHighlightedType(null);
+    setRouteOptions(DEFAULT_ROUTE_OPTIONS);
+    setPickMode(null);
+  }, [persistDrillTypes]);
+
+  // Edit a drill type's appearance (name/color/symbol). The index is unchanged, so the current
+  // result stays valid and simply re-renders with the new look.
+  const editDrillType = useCallback((index: number, patch: Partial<DrillType>) => {
+    setDrillTypes((types) => {
+      const next = types.map((tp, i) => (i === index ? { ...tp, ...patch } : tp));
+      persistDrillTypes(next);
+      return next;
+    });
+  }, [persistDrillTypes]);
 
   const handleAnimationDone = useCallback(() => setStatus("done"), []);
 
@@ -239,6 +353,15 @@ export default function Home() {
     setPickMode(null);
     replayRoute();
   }, [replayRoute]);
+
+  const setNumbering = useCallback(
+    (numbering: RouteOptions["numbering"]) => {
+      setRouteOptions((opts) => (opts.numbering === numbering ? opts : { ...opts, numbering }));
+      setPickMode(null); // start/end picking is meaningless in north→south mode
+      replayRoute();
+    },
+    [replayRoute],
+  );
 
   const startArmed = pickMode === "start";
   const endArmed = pickMode === "end";
@@ -365,7 +488,14 @@ export default function Home() {
               <StepBadge>02</StepBadge>
               <CardTitle>{t.step2Title}</CardTitle>
             </div>
-            <MeasurementControls counts={counts} onChange={setCounts} />
+            <MeasurementControls
+              drillTypes={drillTypes}
+              counts={counts}
+              onCountsChange={setCounts}
+              onAddType={addDrillType}
+              onDeleteType={deleteDrillType}
+              onEditType={editDrillType}
+            />
 
             <div className="mt-4">
               {computing ? (
@@ -433,6 +563,7 @@ export default function Home() {
               ref={plotRef}
               polygon={polygon}
               placements={routedPlacements}
+              drillTypes={drillTypes}
               animation={result?.animation ?? null}
               animate={
                 status === "animating" ? "full" : status === "routing" ? "route" : false
@@ -448,6 +579,7 @@ export default function Home() {
               <>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2.5">
                   <Legend
+                    drillTypes={drillTypes}
                     placements={routed.placements}
                     activeType={highlightedType}
                     onToggleType={toggleHighlight}
@@ -475,7 +607,34 @@ export default function Home() {
                       )}
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      {/* Round-trip switch */}
+                      {/* Numbering mode: shortest route (TSP) vs strictly north→south */}
+                      <div className="inline-flex items-center gap-2">
+                        <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
+                          {t.numberingLabel}
+                        </span>
+                        <div className="inline-flex rounded-full border border-hairline-2 bg-surface p-0.5">
+                          {(["route", "northSouth"] as const).map((mode) => {
+                            const active = routeOptions.numbering === mode;
+                            return (
+                              <button
+                                key={mode}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() => setNumbering(mode)}
+                                className={`cursor-pointer rounded-full px-[11px] py-[3px] font-mono text-xs font-semibold transition ${
+                                  active ? "bg-clay text-clay-on" : "text-ink-2 hover:text-ink"
+                                }`}
+                              >
+                                {mode === "route" ? t.numberByRoute : t.numberNorthSouth}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Round-trip / start / end / reset — shortest-route numbering only */}
+                      {routeOptions.numbering === "route" && (
+                      <>
                       <button
                         type="button"
                         role="switch"
@@ -540,6 +699,8 @@ export default function Home() {
                         >
                           {t.resetRoute}
                         </button>
+                      )}
+                      </>
                       )}
                     </div>
                   </div>
