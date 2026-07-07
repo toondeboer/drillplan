@@ -74,7 +74,8 @@ interface SitePlotProps {
   polygon: Point[] | null;
   placements?: Placement[];
   animation?: KMeansAnimation | null;
-  animate?: boolean;
+  /** "full" plays k-means + route; "route" replays only the route; false stays static. */
+  animate?: "full" | "route" | false;
   onAnimationDone?: () => void;
   /** When set, only placements of this measurement-type index are emphasized. */
   highlightType?: number | null;
@@ -446,6 +447,8 @@ interface RouteDrawOpts {
   showHead?: boolean;
   /** Draw sequence numbers on reached holes. */
   showNumbers?: boolean;
+  /** Extra alpha multiplier for just the sequence numbers (to fade them in). */
+  numberAlpha?: number;
   /** Draw start (and, on open paths, end) rings. */
   startEnd?: boolean;
   alpha?: number;
@@ -472,6 +475,7 @@ function drawRoute(
     drawn = Infinity,
     showHead = false,
     showNumbers = false,
+    numberAlpha = 1,
     startEnd = false,
     alpha = 1,
     startScale = 1,
@@ -520,10 +524,10 @@ function drawRoute(
   }
 
   // Sequence numbers on reached holes.
-  if (showNumbers) {
+  if (showNumbers && numberAlpha > 0) {
     const reached = Math.min(n, full + 1);
     ctx.save();
-    ctx.globalAlpha = alpha;
+    ctx.globalAlpha = alpha * numberAlpha;
     ctx.font = `600 10px ${monoFamily}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -642,7 +646,9 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     );
   }, [animate, polygon, placements, projector, hovered, fontsReady, highlightType, route]);
 
-  // K-means animation timeline.
+  // Animation timeline. `animate === "full"` plays k-means then the route; `animate ===
+  // "route"` replays only the route (e.g. after the start/end/round-trip changes) so a
+  // recompute is always visible.
   useEffect(() => {
     if (!animate) return;
     const canvas = canvasRef.current;
@@ -660,25 +666,24 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     const reduceMotion =
       typeof window !== "undefined" &&
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (!polygon || frames.length === 0 || reduceMotion) {
+    if (!polygon || reduceMotion) {
       finish();
       return;
     }
 
-    const gridPoints = animation!.gridPoints;
+    // K-means stages run only for the "full" clip; a "route" replay skips them entirely.
+    const doKmeans = animate === "full" && frames.length > 0;
+    const gridPoints = animation?.gridPoints ?? [];
     const stepCount = Math.max(1, frames.length - 1);
-    const stepMs = Math.min(
-      STEP_MAX_MS,
-      Math.max(STEP_MIN_MS, ITER_TARGET_MS / stepCount),
-    );
-    const iterMs = stepMs * stepCount;
-    const sweepEnd = SWEEP_MS;
-    const seedEnd = sweepEnd + SEED_MS;
-    const iterEnd = seedEnd + iterMs;
-    const revealEnd = iterEnd + REVEAL_MS;
+    const stepMs = Math.min(STEP_MAX_MS, Math.max(STEP_MIN_MS, ITER_TARGET_MS / stepCount));
+    const sweepEnd = doKmeans ? SWEEP_MS : 0;
+    const seedEnd = sweepEnd + (doKmeans ? SEED_MS : 0);
+    const iterEnd = seedEnd + (doKmeans ? stepMs * stepCount : 0);
+    const revealEnd = iterEnd + (doKmeans ? REVEAL_MS : 0);
 
-    // Route (TSP) stages, played straight after the reveal. Placements are already in the
-    // route's visiting order, so a lookup by original index lets us draw the recorded steps.
+    // Route (TSP) stages, played after the reveal (or immediately, for a route replay).
+    // Placements are already in the route's visiting order, so a lookup by original index
+    // lets us draw the recorded steps.
     const routeReady =
       !!route &&
       route.placements.length >= 2 &&
@@ -800,15 +805,26 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
           });
           drawRouteLength(ctx, pathLengthWorld(nn, rRoundTrip, drawn), mono);
         } else if (elapsed < optEnd) {
-          // Stage 7: 2-opt untangling — step through improved orders, length ticking down.
-          const k = Math.min(optCount, Math.floor((elapsed - buildEnd) / optStepMs) + 1);
+          // Stage 7: 2-opt untangling — crossfade each accepted swap so unchanged edges
+          // stay put while the two swapped edges fade over, length easing down.
+          const t = (elapsed - buildEnd) / optStepMs; // 0 .. optCount
+          const k = Math.min(optCount, Math.floor(t) + 1); // target step 1 .. optCount
+          const f = easeInOut(Math.min(1, Math.max(0, t - (k - 1))));
+          drawRoute(ctx, stepNodes[k - 1], projector, {
+            roundTrip: rRoundTrip,
+            monoFamily: mono,
+            showNumbers: true,
+            startEnd: true,
+            alpha: 1 - f,
+          });
           drawRoute(ctx, stepNodes[k], projector, {
             roundTrip: rRoundTrip,
             monoFamily: mono,
             showNumbers: true,
             startEnd: true,
+            alpha: f,
           });
-          drawRouteLength(ctx, rLengths[k], mono);
+          drawRouteLength(ctx, rLengths[k - 1] + (rLengths[k] - rLengths[k - 1]) * f, mono);
         } else {
           // Stage 8: settle on the final optimized route.
           drawRoute(ctx, placements, projector, {
@@ -862,27 +878,27 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
 
   const onClickCanvas = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (animate) {
-        skipRef.current = true;
+      // An armed start/end pick wins, even mid route-replay, so the user isn't blocked.
+      if (pickMode && onPickPoint && placements.length) {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const mx = ((e.clientX - rect.left) / rect.width) * WIDTH;
+        const my = ((e.clientY - rect.top) / rect.height) * HEIGHT;
+        let best: number | null = null;
+        let bestDist = 18 * 18;
+        placements.forEach((pl, idx) => {
+          const [sx, sy] = projector.project(pl);
+          const d = (sx - mx) ** 2 + (sy - my) ** 2;
+          if (d < bestDist) {
+            bestDist = d;
+            best = idx;
+          }
+        });
+        if (best != null) onPickPoint(best);
         return;
       }
-      if (!pickMode || !onPickPoint || !placements.length) return;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const mx = ((e.clientX - rect.left) / rect.width) * WIDTH;
-      const my = ((e.clientY - rect.top) / rect.height) * HEIGHT;
-      let best: number | null = null;
-      let bestDist = 18 * 18;
-      placements.forEach((pl, idx) => {
-        const [sx, sy] = projector.project(pl);
-        const d = (sx - mx) ** 2 + (sy - my) ** 2;
-        if (d < bestDist) {
-          bestDist = d;
-          best = idx;
-        }
-      });
-      if (best != null) onPickPoint(best);
+      if (animate) skipRef.current = true; // otherwise a click skips the running animation
     },
     [animate, pickMode, onPickPoint, placements, projector],
   );
@@ -898,7 +914,7 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
           width: "100%",
           height: "auto",
           display: "block",
-          cursor: pickMode && !animate ? "crosshair" : "default",
+          cursor: pickMode ? "crosshair" : "default",
         }}
         onMouseMove={onMove}
         onMouseLeave={() => setHovered(null)}

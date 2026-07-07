@@ -50,8 +50,12 @@ export interface Dict {
 
   routeTitle: string;
   roundTrip: string;
-  setStart: string;
-  setEnd: string;
+  startLabel: string;
+  endLabel: string;
+  startAuto: string;
+  endAuto: string;
+  custom: string;
+  optimizing: string;
   resetRoute: string;
   pickHint: string;
 
@@ -103,12 +107,16 @@ const nl: Dict = {
   skipAnimation: "Overslaan",
   replayAnimation: "Opnieuw afspelen",
 
-  routeTitle: "Boorroute",
+  routeTitle: "Route",
   roundTrip: "Rondrit",
-  setStart: "Start kiezen",
-  setEnd: "Eind kiezen",
+  startLabel: "Start",
+  endLabel: "Eind",
+  startAuto: "noordelijkste",
+  endAuto: "auto",
+  custom: "handmatig",
+  optimizing: "optimaliseren…",
   resetRoute: "Herstellen",
-  pickHint: "Klik op een boorpunt op de kaart.",
+  pickHint: "Klik op een boorpunt op de kaart om het te kiezen.",
 
   tipId: "Nr.",
 
@@ -165,10 +173,14 @@ const en: Dict = {
 
   routeTitle: "Route",
   roundTrip: "Round trip",
-  setStart: "Set start",
-  setEnd: "Set end",
+  startLabel: "Start",
+  endLabel: "End",
+  startAuto: "north-most",
+  endAuto: "auto",
+  custom: "custom",
+  optimizing: "optimizing…",
   resetRoute: "Reset",
-  pickHint: "Click a hole on the map.",
+  pickHint: "Click a hole on the map to set it.",
 
   tipId: "No.",
 

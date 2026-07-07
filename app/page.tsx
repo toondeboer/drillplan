@@ -20,7 +20,8 @@ import {
 } from "@/lib/algorithm/types";
 import { format, useI18n } from "@/lib/i18n";
 
-type Status = "idle" | "computing" | "animating" | "done" | "error";
+// "routing" replays just the route animation after a start/end/round-trip change.
+type Status = "idle" | "computing" | "animating" | "routing" | "done" | "error";
 type PickMode = "start" | "end" | null;
 
 /** Fresh route: a round trip starting at the north-most hole, end chosen automatically. */
@@ -193,6 +194,12 @@ export default function Home() {
     }
   }, [result]);
 
+  // Replay the route-only animation so a re-optimization is always visible. Guarded so it
+  // only fires once there is a result on screen.
+  const replayRoute = useCallback(() => {
+    setStatus((s) => (s === "done" || s === "routing" ? "routing" : s));
+  }, []);
+
   // Map a clicked hole (routed index) back to its stable original index, then set it as the
   // route's start or end. The route re-optimizes instantly via the `routed` memo.
   const handlePickPoint = useCallback(
@@ -205,19 +212,27 @@ export default function Home() {
           : { ...opts, endIndex: originalIndex };
       });
       setPickMode(null);
+      replayRoute();
     },
-    [routed, pickMode],
+    [routed, pickMode, replayRoute],
   );
 
   const toggleRoundTrip = useCallback(() => {
     setRouteOptions((opts) => ({ ...opts, roundTrip: !opts.roundTrip }));
     setPickMode((m) => (m === "end" ? null : m)); // "end" is meaningless on a round trip
-  }, []);
+    replayRoute();
+  }, [replayRoute]);
 
   const resetRoute = useCallback(() => {
     setRouteOptions((opts) => ({ ...opts, startIndex: null, endIndex: null }));
     setPickMode(null);
-  }, []);
+    replayRoute();
+  }, [replayRoute]);
+
+  const startArmed = pickMode === "start";
+  const endArmed = pickMode === "end";
+  const armStart = useCallback(() => setPickMode((m) => (m === "start" ? null : "start")), []);
+  const armEnd = useCallback(() => setPickMode((m) => (m === "end" ? null : "end")), []);
 
   const toggleHighlight = useCallback((typeIndex: number) => {
     setHighlightedType((cur) => (cur === typeIndex ? null : typeIndex));
@@ -351,7 +366,9 @@ export default function Home() {
                   disabled={!polygon || total < 1}
                   className="w-full rounded-[11px] py-[13px] text-[15px] font-semibold transition enabled:cursor-pointer enabled:bg-clay enabled:text-clay-on enabled:hover:bg-clay-hover disabled:cursor-not-allowed disabled:bg-divider disabled:text-ink-4"
                 >
-                  {status === "done" || status === "animating" ? t.recompute : t.compute}
+                  {status === "done" || status === "animating" || status === "routing"
+                    ? t.recompute
+                    : t.compute}
                 </button>
               )}
               {total < 1 && polygon && (
@@ -406,15 +423,17 @@ export default function Home() {
               polygon={polygon}
               placements={routedPlacements}
               animation={result?.animation ?? null}
-              animate={status === "animating"}
+              animate={
+                status === "animating" ? "full" : status === "routing" ? "route" : false
+              }
               onAnimationDone={handleAnimationDone}
               highlightType={highlightedType}
               route={routed}
-              pickMode={status === "done" ? pickMode : null}
+              pickMode={status === "done" || status === "routing" ? pickMode : null}
               onPickPoint={handlePickPoint}
             />
 
-            {status === "done" && result && routed && (
+            {(status === "done" || status === "routing") && result && routed && (
               <>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2.5">
                   <Legend
@@ -432,7 +451,7 @@ export default function Home() {
 
                 {/* Drilling route (Traveling Salesman) controls */}
                 <div className="mt-3 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-[13px]">
-                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
                     <div className="flex items-center gap-2.5">
                       <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
                         {t.routeTitle}
@@ -440,36 +459,69 @@ export default function Home() {
                       <span className="font-mono text-[13px] font-semibold text-ink">
                         {`${Math.round(routed.length).toLocaleString()} m`}
                       </span>
+                      {status === "routing" && (
+                        <span className="font-mono text-[11px] text-clay">{t.optimizing}</span>
+                      )}
                     </div>
-                    <div className="flex flex-wrap items-center gap-[7px]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Round-trip switch */}
                       <button
                         type="button"
-                        aria-pressed={routeOptions.roundTrip}
+                        role="switch"
+                        aria-checked={routeOptions.roundTrip}
                         onClick={toggleRoundTrip}
-                        className={routePill(routeOptions.roundTrip)}
+                        className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-hairline-2 bg-surface px-2.5 py-1 transition hover:border-clay-soft-border"
                       >
-                        ↺ {t.roundTrip}
+                        <span
+                          className={`relative h-[16px] w-[28px] rounded-full transition-colors ${
+                            routeOptions.roundTrip ? "bg-clay" : "bg-divider"
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-[2px] h-[12px] w-[12px] rounded-full bg-white transition-all ${
+                              routeOptions.roundTrip ? "left-[14px]" : "left-[2px]"
+                            }`}
+                          />
+                        </span>
+                        <span className="font-mono text-xs font-semibold text-ink-2">
+                          {t.roundTrip}
+                        </span>
                       </button>
+
+                      {/* Start chip */}
                       <button
                         type="button"
-                        aria-pressed={pickMode === "start"}
-                        onClick={() => setPickMode((m) => (m === "start" ? null : "start"))}
-                        className={routePill(pickMode === "start")}
+                        aria-pressed={startArmed}
+                        onClick={armStart}
+                        className={routePill(startArmed)}
                       >
-                        {t.setStart}
-                        {routeOptions.startIndex != null ? " ✓" : ""}
+                        <span
+                          className="h-[7px] w-[7px] rounded-full"
+                          style={{ background: "#bd5a2e" }}
+                        />
+                        {t.startLabel}:{" "}
+                        {routeOptions.startIndex == null ? t.startAuto : t.custom}
                       </button>
-                      <button
-                        type="button"
-                        disabled={routeOptions.roundTrip}
-                        aria-pressed={pickMode === "end"}
-                        onClick={() => setPickMode((m) => (m === "end" ? null : "end"))}
-                        className={routePill(pickMode === "end", routeOptions.roundTrip)}
-                      >
-                        {t.setEnd}
-                        {!routeOptions.roundTrip && routeOptions.endIndex != null ? " ✓" : ""}
-                      </button>
-                      {(routeOptions.startIndex != null || routeOptions.endIndex != null) && (
+
+                      {/* End chip — one-way only */}
+                      {!routeOptions.roundTrip && (
+                        <button
+                          type="button"
+                          aria-pressed={endArmed}
+                          onClick={armEnd}
+                          className={routePill(endArmed)}
+                        >
+                          <span
+                            className="h-[7px] w-[7px] rounded-full"
+                            style={{ background: "#2f6b73" }}
+                          />
+                          {t.endLabel}:{" "}
+                          {routeOptions.endIndex == null ? t.endAuto : t.custom}
+                        </button>
+                      )}
+
+                      {(routeOptions.startIndex != null ||
+                        (!routeOptions.roundTrip && routeOptions.endIndex != null)) && (
                         <button
                           type="button"
                           onClick={resetRoute}
@@ -481,7 +533,7 @@ export default function Home() {
                     </div>
                   </div>
                   {pickMode && (
-                    <p className="mt-2 font-mono text-[12px] text-clay">{t.pickHint}</p>
+                    <p className="mt-2.5 font-mono text-[12px] text-clay">{t.pickHint}</p>
                   )}
                 </div>
 
