@@ -82,14 +82,15 @@ const nl: Dict = {
   step3Title: "Terreinkaart",
 
   dropHere: "Sleep je terreinomtrek hierheen",
-  dropHint: "sleep een CSV hierheen, of",
+  dropHint: "sleep een CSV of shapefile hierheen, of",
   browse: "Bestand kiezen",
   tryExample: "Probeer een voorbeeld",
   downloadExample: "Voorbeeld-CSV downloaden",
-  fileNeeds: 'Vereist kolommen "Position X" en "Position Y".',
+  fileNeeds:
+    'CSV met kolommen "Position X" en "Position Y", of een QGIS-shapefile (.shp, .shx, .dbf, .prj …).',
   vertexLabel: "{n} hoekpunten geladen",
   noArea: "Geen terrein geladen",
-  noAreaHint: "Upload een CSV-omtrek om het gebied te tekenen.",
+  noAreaHint: "Upload een CSV- of shapefile-omtrek om het gebied te tekenen.",
   changeFile: "Ander bestand",
 
   countsHint: "Kies per type hoeveel locaties je nodig hebt.",
@@ -146,14 +147,15 @@ const en: Dict = {
   step3Title: "Site map",
 
   dropHere: "Drop your site outline",
-  dropHint: "drag a CSV here, or",
+  dropHint: "drag a CSV or shapefile here, or",
   browse: "Choose a file",
   tryExample: "Try an example",
   downloadExample: "Download example CSV",
-  fileNeeds: 'Needs "Position X" and "Position Y" columns.',
+  fileNeeds:
+    'A CSV with "Position X" and "Position Y" columns, or a QGIS shapefile (.shp, .shx, .dbf, .prj …).',
   vertexLabel: "{n} vertices loaded",
   noArea: "No site loaded",
-  noAreaHint: "Upload a CSV outline to draw the survey area.",
+  noAreaHint: "Upload a CSV or shapefile outline to draw the survey area.",
   changeFile: "Change file",
 
   countsHint: "Set how many locations you need per type.",
