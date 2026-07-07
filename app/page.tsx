@@ -9,16 +9,27 @@ import { ProgressBar } from "@/components/ProgressBar";
 import { SitePlot, type SitePlotHandle } from "@/components/SitePlot";
 import { downloadFile, parseAreaCsv, placementsToCsv, polygonToCsv } from "@/lib/csv";
 import { generateExamplePolygon } from "@/lib/exampleArea";
+import { optimizeRoute } from "@/lib/algorithm/route";
 import {
   type ComputeInput,
   type ComputeResult,
   type Placement,
   type Point,
+  type RouteOptions,
   type WorkerOutMessage,
 } from "@/lib/algorithm/types";
 import { format, useI18n } from "@/lib/i18n";
 
-type Status = "idle" | "computing" | "animating" | "done" | "error";
+// "routing" replays just the route animation after a start/end/round-trip change.
+type Status = "idle" | "computing" | "animating" | "routing" | "done" | "error";
+type PickMode = "start" | "end" | null;
+
+/** Fresh route: a round trip starting at the north-most hole, end chosen automatically. */
+const DEFAULT_ROUTE_OPTIONS: RouteOptions = {
+  startIndex: null,
+  endIndex: null,
+  roundTrip: true,
+};
 
 function baseName(name: string): string {
   return name.replace(/\.[^.]+$/, "") || "drillplan";
@@ -58,6 +69,15 @@ function CardTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Pill-button styling for the route controls, mirroring the Legend pills. */
+function routePill(active: boolean, disabled = false): string {
+  return `inline-flex items-center gap-1.5 rounded-full border px-[11px] py-1 font-mono text-xs font-semibold transition ${
+    active
+      ? "border-clay bg-clay-soft-bg text-clay"
+      : "border-hairline-2 bg-surface text-ink-2"
+  } ${disabled ? "cursor-not-allowed opacity-45" : "cursor-pointer hover:text-ink"}`;
+}
+
 export default function Home() {
   const { t } = useI18n();
 
@@ -69,10 +89,21 @@ export default function Home() {
   const [result, setResult] = useState<ComputeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [highlightedType, setHighlightedType] = useState<number | null>(null);
+  const [routeOptions, setRouteOptions] = useState<RouteOptions>(DEFAULT_ROUTE_OPTIONS);
+  const [pickMode, setPickMode] = useState<PickMode>(null);
 
   const plotRef = useRef<SitePlotHandle>(null);
 
   const total = counts.reduce((a, b) => a + b, 0);
+
+  // Order the holes into the shortest drilling route (Traveling Salesman). Cheap for these
+  // hole counts, so it re-runs on the client whenever the start/end/round-trip changes —
+  // no need to re-run the k-means worker.
+  const routed = useMemo(
+    () => (result ? optimizeRoute(result.placements, routeOptions) : null),
+    [result, routeOptions],
+  );
+  const routedPlacements = routed?.placements;
 
   const spread = useMemo(
     () => (result ? minSameTypeDistance(result.placements) : null),
@@ -84,6 +115,8 @@ export default function Home() {
     setResult(null);
     setStatus("idle");
     setHighlightedType(null);
+    setRouteOptions(DEFAULT_ROUTE_OPTIONS);
+    setPickMode(null);
     try {
       const { polygon } = await parseAreaCsv(file);
       setPolygon(polygon);
@@ -100,6 +133,8 @@ export default function Home() {
     setResult(null);
     setStatus("idle");
     setHighlightedType(null);
+    setRouteOptions(DEFAULT_ROUTE_OPTIONS);
+    setPickMode(null);
     setPolygon(generateExamplePolygon());
     setFileName("example-site.csv");
   }, []);
@@ -114,6 +149,8 @@ export default function Home() {
     setError(null);
     setResult(null);
     setHighlightedType(null);
+    setRouteOptions(DEFAULT_ROUTE_OPTIONS);
+    setPickMode(null);
 
     const worker = new Worker(
       new URL("../workers/compute.worker.ts", import.meta.url),
@@ -143,18 +180,59 @@ export default function Home() {
   }, [polygon, counts, total]);
 
   const handleDownloadCsv = useCallback(() => {
-    if (!result) return;
-    downloadFile(`${baseName(fileName)}_result.csv`, placementsToCsv(result.placements));
-  }, [result, fileName]);
+    if (!routedPlacements) return;
+    downloadFile(`${baseName(fileName)}_result.csv`, placementsToCsv(routedPlacements));
+  }, [routedPlacements, fileName]);
 
   const handleAnimationDone = useCallback(() => setStatus("done"), []);
 
   const handleReplay = useCallback(() => {
     if (result?.animation) {
       setHighlightedType(null);
+      setPickMode(null);
       setStatus("animating");
     }
   }, [result]);
+
+  // Replay the route-only animation so a re-optimization is always visible. Guarded so it
+  // only fires once there is a result on screen.
+  const replayRoute = useCallback(() => {
+    setStatus((s) => (s === "done" || s === "routing" ? "routing" : s));
+  }, []);
+
+  // Map a clicked hole (routed index) back to its stable original index, then set it as the
+  // route's start or end. The route re-optimizes instantly via the `routed` memo.
+  const handlePickPoint = useCallback(
+    (routedIndex: number) => {
+      setRouteOptions((opts) => {
+        if (!routed || !pickMode) return opts;
+        const originalIndex = routed.order[routedIndex];
+        return pickMode === "start"
+          ? { ...opts, startIndex: originalIndex }
+          : { ...opts, endIndex: originalIndex };
+      });
+      setPickMode(null);
+      replayRoute();
+    },
+    [routed, pickMode, replayRoute],
+  );
+
+  const toggleRoundTrip = useCallback(() => {
+    setRouteOptions((opts) => ({ ...opts, roundTrip: !opts.roundTrip }));
+    setPickMode((m) => (m === "end" ? null : m)); // "end" is meaningless on a round trip
+    replayRoute();
+  }, [replayRoute]);
+
+  const resetRoute = useCallback(() => {
+    setRouteOptions((opts) => ({ ...opts, startIndex: null, endIndex: null }));
+    setPickMode(null);
+    replayRoute();
+  }, [replayRoute]);
+
+  const startArmed = pickMode === "start";
+  const endArmed = pickMode === "end";
+  const armStart = useCallback(() => setPickMode((m) => (m === "start" ? null : "start")), []);
+  const armEnd = useCallback(() => setPickMode((m) => (m === "end" ? null : "end")), []);
 
   const toggleHighlight = useCallback((typeIndex: number) => {
     setHighlightedType((cur) => (cur === typeIndex ? null : typeIndex));
@@ -241,6 +319,8 @@ export default function Home() {
                     setResult(null);
                     setStatus("idle");
                     setError(null);
+                    setRouteOptions(DEFAULT_ROUTE_OPTIONS);
+                    setPickMode(null);
                   }}
                   className="cursor-pointer text-[13px] font-medium text-ink-3 transition hover:text-ink"
                 >
@@ -286,7 +366,9 @@ export default function Home() {
                   disabled={!polygon || total < 1}
                   className="w-full rounded-[11px] py-[13px] text-[15px] font-semibold transition enabled:cursor-pointer enabled:bg-clay enabled:text-clay-on enabled:hover:bg-clay-hover disabled:cursor-not-allowed disabled:bg-divider disabled:text-ink-4"
                 >
-                  {status === "done" || status === "animating" ? t.recompute : t.compute}
+                  {status === "done" || status === "animating" || status === "routing"
+                    ? t.recompute
+                    : t.compute}
                 </button>
               )}
               {total < 1 && polygon && (
@@ -339,18 +421,23 @@ export default function Home() {
             <SitePlot
               ref={plotRef}
               polygon={polygon}
-              placements={result?.placements}
+              placements={routedPlacements}
               animation={result?.animation ?? null}
-              animate={status === "animating"}
+              animate={
+                status === "animating" ? "full" : status === "routing" ? "route" : false
+              }
               onAnimationDone={handleAnimationDone}
               highlightType={highlightedType}
+              route={routed}
+              pickMode={status === "done" || status === "routing" ? pickMode : null}
+              onPickPoint={handlePickPoint}
             />
 
-            {status === "done" && result && (
+            {(status === "done" || status === "routing") && result && routed && (
               <>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2.5">
                   <Legend
-                    placements={result.placements}
+                    placements={routed.placements}
                     activeType={highlightedType}
                     onToggleType={toggleHighlight}
                   />
@@ -361,6 +448,95 @@ export default function Home() {
                     </span>
                   </div>
                 </div>
+
+                {/* Drilling route (Traveling Salesman) controls */}
+                <div className="mt-3 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-[13px]">
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
+                        {t.routeTitle}
+                      </span>
+                      <span className="font-mono text-[13px] font-semibold text-ink">
+                        {`${Math.round(routed.length).toLocaleString()} m`}
+                      </span>
+                      {status === "routing" && (
+                        <span className="font-mono text-[11px] text-clay">{t.optimizing}</span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Round-trip switch */}
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={routeOptions.roundTrip}
+                        onClick={toggleRoundTrip}
+                        className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-hairline-2 bg-surface px-2.5 py-1 transition hover:border-clay-soft-border"
+                      >
+                        <span
+                          className={`relative h-[16px] w-[28px] rounded-full transition-colors ${
+                            routeOptions.roundTrip ? "bg-clay" : "bg-divider"
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-[2px] h-[12px] w-[12px] rounded-full bg-white transition-all ${
+                              routeOptions.roundTrip ? "left-[14px]" : "left-[2px]"
+                            }`}
+                          />
+                        </span>
+                        <span className="font-mono text-xs font-semibold text-ink-2">
+                          {t.roundTrip}
+                        </span>
+                      </button>
+
+                      {/* Start chip */}
+                      <button
+                        type="button"
+                        aria-pressed={startArmed}
+                        onClick={armStart}
+                        className={routePill(startArmed)}
+                      >
+                        <span
+                          className="h-[7px] w-[7px] rounded-full"
+                          style={{ background: "#bd5a2e" }}
+                        />
+                        {t.startLabel}:{" "}
+                        {routeOptions.startIndex == null ? t.startAuto : t.custom}
+                      </button>
+
+                      {/* End chip — one-way only */}
+                      {!routeOptions.roundTrip && (
+                        <button
+                          type="button"
+                          aria-pressed={endArmed}
+                          onClick={armEnd}
+                          className={routePill(endArmed)}
+                        >
+                          <span
+                            className="h-[7px] w-[7px] rounded-full"
+                            style={{ background: "#2f6b73" }}
+                          />
+                          {t.endLabel}:{" "}
+                          {routeOptions.endIndex == null ? t.endAuto : t.custom}
+                        </button>
+                      )}
+
+                      {(routeOptions.startIndex != null ||
+                        (!routeOptions.roundTrip && routeOptions.endIndex != null)) && (
+                        <button
+                          type="button"
+                          onClick={resetRoute}
+                          className="cursor-pointer px-1 font-mono text-xs font-semibold text-ink-3 transition hover:text-ink"
+                        >
+                          {t.resetRoute}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {pickMode && (
+                    <p className="mt-2.5 font-mono text-[12px] text-clay">{t.pickHint}</p>
+                  )}
+                </div>
+
                 <div className="mt-4 flex gap-[11px]">
                   <button
                     type="button"
