@@ -69,6 +69,38 @@ export function optimizeRoute(placements: Placement[], opts: RouteOptions): Rout
   };
 }
 
+/**
+ * Order holes strictly north→south (descending y, tie-break west→east) instead of by the
+ * shortest route. No optimization — the walking path is just the numbered holes joined
+ * top-to-bottom. Returns the same `RoutePlan` shape as `optimizeRoute` (a single step, so the
+ * UI draws the path without a 2-opt untangle).
+ */
+export function orderNorthToSouth(placements: Placement[]): RoutePlan {
+  const order = placements
+    .map((_, i) => i)
+    .sort((a, b) => {
+      const dy = placements[b].y - placements[a].y; // north (larger y) first
+      return dy !== 0 ? dy : placements[a].x - placements[b].x; // then west → east
+    });
+
+  let length = 0;
+  for (let i = 0; i + 1 < order.length; i++) {
+    length += Math.hypot(
+      placements[order[i]].x - placements[order[i + 1]].x,
+      placements[order[i]].y - placements[order[i + 1]].y,
+    );
+  }
+
+  return {
+    placements: renumber(placements, order),
+    order,
+    length,
+    roundTrip: false,
+    steps: [order.slice()],
+    lengths: [length],
+  };
+}
+
 /** Index of the north-most (largest y) placement; 0 when empty. */
 export function northernmostIndex(placements: Placement[]): number {
   let best = 0;

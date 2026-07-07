@@ -36,6 +36,12 @@ export interface Dict {
   countsHint: string;
   totalLabelText: string;
   needAtLeastOne: string;
+  addDrill: string;
+  deleteDrill: string;
+  editDrill: string;
+  drillNameLabel: string;
+  drillColorLabel: string;
+  drillSymbolLabel: string;
 
   compute: string;
   recompute: string;
@@ -58,13 +64,13 @@ export interface Dict {
   optimizing: string;
   resetRoute: string;
   pickHint: string;
+  numberingLabel: string;
+  numberByRoute: string;
+  numberNorthSouth: string;
 
   tipId: string;
 
   errorTitle: string;
-
-  /** Per-type description, keyed by measurement code. */
-  types: Record<string, string>;
 
   aboutTitle: string;
   about: string;
@@ -96,6 +102,12 @@ const nl: Dict = {
   countsHint: "Kies per type hoeveel locaties je nodig hebt.",
   totalLabelText: "Totaal aantal locaties",
   needAtLeastOne: "Kies minstens één locatie.",
+  addDrill: "Boortype toevoegen",
+  deleteDrill: "Boortype verwijderen",
+  editDrill: "Kleur en symbool wijzigen",
+  drillNameLabel: "Naam",
+  drillColorLabel: "Kleur",
+  drillSymbolLabel: "Symbool",
 
   compute: "Plaatsing berekenen",
   recompute: "Opnieuw berekenen",
@@ -118,17 +130,13 @@ const nl: Dict = {
   optimizing: "optimaliseren…",
   resetRoute: "Herstellen",
   pickHint: "Klik op een boorpunt op de kaart om het te kiezen.",
+  numberingLabel: "Nummering",
+  numberByRoute: "Route",
+  numberNorthSouth: "Noord→Zuid",
 
   tipId: "Nr.",
 
   errorTitle: "Er ging iets mis",
-
-  types: {
-    BOR05: "Boring · 5 m",
-    BOR10: "Boring · 10 m",
-    BOR20: "Boring · 20 m",
-    PB: "Peilbuis",
-  },
 
   aboutTitle: "Hoe werkt het",
   about:
@@ -161,6 +169,12 @@ const en: Dict = {
   countsHint: "Set how many locations you need per type.",
   totalLabelText: "Total locations",
   needAtLeastOne: "Choose at least one location.",
+  addDrill: "Add drill type",
+  deleteDrill: "Remove drill type",
+  editDrill: "Edit color and symbol",
+  drillNameLabel: "Name",
+  drillColorLabel: "Color",
+  drillSymbolLabel: "Symbol",
 
   compute: "Calculate placement",
   recompute: "Recalculate",
@@ -183,17 +197,13 @@ const en: Dict = {
   optimizing: "optimizing…",
   resetRoute: "Reset",
   pickHint: "Click a hole on the map to set it.",
+  numberingLabel: "Numbering",
+  numberByRoute: "Route",
+  numberNorthSouth: "North→South",
 
   tipId: "No.",
 
   errorTitle: "Something went wrong",
-
-  types: {
-    BOR05: "Boring · 5 m",
-    BOR10: "Boring · 10 m",
-    BOR20: "Boring · 20 m",
-    PB: "Monitoring well",
-  },
 
   aboutTitle: "How it works",
   about:

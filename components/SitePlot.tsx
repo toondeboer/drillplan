@@ -11,7 +11,8 @@ import {
 } from "react";
 import { getBounds, type Bounds } from "@/lib/algorithm/geometry";
 import {
-  MEASUREMENT_TYPES,
+  type DrillSymbol,
+  type DrillType,
   type KMeansAnimation,
   type Placement,
   type Point,
@@ -73,6 +74,8 @@ export interface SitePlotHandle {
 interface SitePlotProps {
   polygon: Point[] | null;
   placements?: Placement[];
+  /** The drill-type definitions (color + shape), indexed by `Placement.typeIndex`. */
+  drillTypes: DrillType[];
   animation?: KMeansAnimation | null;
   /** "full" plays k-means + route; "route" replays only the route; false stays static. */
   animate?: "full" | "route" | false;
@@ -250,18 +253,61 @@ function drawPolygon(
   ctx.restore();
 }
 
+/** Trace the marker path for `symbol`, centered at (x, y) with nominal radius r. */
+function traceSymbol(
+  ctx: CanvasRenderingContext2D,
+  symbol: DrillSymbol,
+  x: number,
+  y: number,
+  r: number,
+) {
+  ctx.beginPath();
+  switch (symbol) {
+    case "square": {
+      const s = r * 0.9;
+      ctx.rect(x - s, y - s, s * 2, s * 2);
+      break;
+    }
+    case "triangle": {
+      const h = r * 1.2;
+      ctx.moveTo(x, y - h);
+      ctx.lineTo(x + h * 0.95, y + h * 0.72);
+      ctx.lineTo(x - h * 0.95, y + h * 0.72);
+      ctx.closePath();
+      break;
+    }
+    case "diamond": {
+      const d = r * 1.18;
+      ctx.moveTo(x, y - d);
+      ctx.lineTo(x + d, y);
+      ctx.lineTo(x, y + d);
+      ctx.lineTo(x - d, y);
+      ctx.closePath();
+      break;
+    }
+    case "circle":
+    default:
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      break;
+  }
+}
+
 function drawPlacements(
   ctx: CanvasRenderingContext2D,
   placements: Placement[],
+  drillTypes: DrillType[],
   projector: Projector,
   hovered: number | null,
   alpha = 1,
   highlightType: number | null = null,
 ) {
   ctx.save();
+  ctx.lineJoin = "round";
   placements.forEach((pl, idx) => {
     const [sx, sy] = projector.project(pl);
-    const color = MEASUREMENT_TYPES[pl.typeIndex].color;
+    const type = drillTypes[pl.typeIndex];
+    const color = type?.color ?? "#8a7a5c";
+    const symbol = type?.symbol ?? "circle";
     const isHover = hovered === idx;
     const dimmed = highlightType != null && pl.typeIndex !== highlightType;
     const emphasized = highlightType != null && pl.typeIndex === highlightType;
@@ -273,8 +319,7 @@ function drawPlacements(
       ctx.fillStyle = "rgba(42,36,25,0.14)";
       ctx.fill();
     }
-    ctx.beginPath();
-    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    traceSymbol(ctx, symbol, sx, sy, r);
     ctx.fillStyle = color;
     ctx.fill();
     ctx.lineWidth = 1.8;
@@ -332,6 +377,7 @@ function drawStatic(
   ctx: CanvasRenderingContext2D,
   polygon: Point[] | null,
   placements: Placement[],
+  drillTypes: DrillType[],
   projector: Projector,
   hovered: number | null,
   monoFamily: string,
@@ -356,7 +402,7 @@ function drawStatic(
     });
     drawRouteLength(ctx, route.length, monoFamily);
   }
-  drawPlacements(ctx, placements, projector, hovered, 1, highlightType);
+  drawPlacements(ctx, placements, drillTypes, projector, hovered, 1, highlightType);
   drawScaleAndNorth(ctx, projector, monoFamily);
 }
 
@@ -584,6 +630,7 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
   {
     polygon,
     placements = [],
+    drillTypes,
     animation = null,
     animate = false,
     onAnimationDone,
@@ -638,13 +685,14 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
       prepared.ctx,
       polygon,
       placements,
+      drillTypes,
       projector,
       hovered,
       prepared.mono,
       highlightType,
       route,
     );
-  }, [animate, polygon, placements, projector, hovered, fontsReady, highlightType, route]);
+  }, [animate, polygon, placements, drillTypes, projector, hovered, fontsReady, highlightType, route]);
 
   // Animation timeline. `animate === "full"` plays k-means then the route; `animate ===
   // "route"` replays only the route (e.g. after the start/end/round-trip changes) so a
@@ -658,7 +706,7 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     const { ctx, mono } = prepared;
 
     const finish = () => {
-      drawStatic(ctx, polygon, placements, projector, hovered, mono, null, route);
+      drawStatic(ctx, polygon, placements, drillTypes, projector, hovered, mono, null, route);
       doneRef.current?.();
     };
 
@@ -774,11 +822,11 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
           null,
         );
         drawCentroids(ctx, final, projector, CENTROID_R, 1 - f);
-        drawPlacements(ctx, placements, projector, null, f);
+        drawPlacements(ctx, placements, drillTypes, projector, null, f);
         drawScaleAndNorth(ctx, projector, mono);
       } else if (routeReady && elapsed < routeEnd) {
         // Route stages: hold the finished holes, then build + untangle the route on top.
-        drawPlacements(ctx, placements, projector, null, 1);
+        drawPlacements(ctx, placements, drillTypes, projector, null, 1);
         drawScaleAndNorth(ctx, projector, mono);
         const nn = stepNodes[0];
         if (elapsed < markEnd) {
@@ -851,7 +899,7 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     // `hovered` is intentionally excluded: it never changes while animating and
     // including it would restart the timeline.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animate, animation, polygon, placements, projector, route]);
+  }, [animate, animation, polygon, placements, drillTypes, projector, route]);
 
   const onMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -946,8 +994,8 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
           <div className="font-mono text-[11.5px] font-semibold tracking-[0.02em]">
             <span className="text-[#cfc6b4]">{t.tipId} </span>
             {hoveredPlacement.id} ·{" "}
-            <span style={{ color: MEASUREMENT_TYPES[hoveredPlacement.typeIndex].color }}>
-              {MEASUREMENT_TYPES[hoveredPlacement.typeIndex].code}
+            <span style={{ color: drillTypes[hoveredPlacement.typeIndex]?.color ?? "#cfc6b4" }}>
+              {drillTypes[hoveredPlacement.typeIndex]?.code ?? "?"}
             </span>
           </div>
           <div className="mt-0.5 font-mono text-[11px] text-[#b8b09d]">

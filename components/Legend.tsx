@@ -1,28 +1,30 @@
 "use client";
 
-import { MEASUREMENT_TYPES, type Placement } from "@/lib/algorithm/types";
+import { DrillGlyph } from "@/components/DrillGlyph";
+import { type DrillType, type Placement } from "@/lib/algorithm/types";
 
 interface LegendProps {
+  drillTypes: DrillType[];
   placements: Placement[];
-  /** Currently highlighted measurement-type index, or null for none. */
+  /** Currently highlighted drill-type index, or null for none. */
   activeType?: number | null;
-  /** Toggle the highlight for a measurement-type index. */
+  /** Toggle the highlight for a drill-type index. */
   onToggleType?: (typeIndex: number) => void;
 }
 
-export function Legend({ placements, activeType = null, onToggleType }: LegendProps) {
-  const countByType = MEASUREMENT_TYPES.map(
+export function Legend({ drillTypes, placements, activeType = null, onToggleType }: LegendProps) {
+  const countByType = drillTypes.map(
     (_, i) => placements.filter((p) => p.typeIndex === i).length,
   );
 
   return (
     <div className="flex flex-wrap gap-[7px]">
-      {MEASUREMENT_TYPES.map((type, i) => {
+      {drillTypes.map((type, i) => {
         const isActive = activeType === i;
         const disabled = countByType[i] === 0 || !onToggleType;
         return (
           <button
-            key={type.code}
+            key={type.id}
             type="button"
             disabled={disabled}
             aria-pressed={isActive}
@@ -38,10 +40,7 @@ export function Legend({ placements, activeType = null, onToggleType }: LegendPr
                 : "cursor-pointer hover:border-clay-soft-border"
             } ${activeType != null && !isActive ? "opacity-55" : ""}`}
           >
-            <span
-              className="h-[9px] w-[9px] rounded-full"
-              style={{ backgroundColor: type.color }}
-            />
+            <DrillGlyph symbol={type.symbol} color={type.color} size={11} />
             <span className="font-mono text-[11.5px] font-semibold text-ink">
               {type.code}
             </span>

@@ -1,38 +1,46 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { parseAreaCsv, placementsToCsv, polygonToCsv } from "./csv";
-import type { Placement, Point } from "./algorithm/types";
+import type { DrillType, Placement, Point } from "./algorithm/types";
 
 function csvFile(content: string): File {
   return new File([content], "area.csv", { type: "text/csv" });
 }
 
+const drillTypes: DrillType[] = [
+  { id: "a", code: "BOR05", color: "#000", symbol: "circle" },
+  { id: "b", code: "BOR10", color: "#000", symbol: "square" },
+  { id: "c", code: "BOR20", color: "#000", symbol: "diamond" },
+  { id: "d", code: "PB", color: "#000", symbol: "triangle" },
+];
+
 describe("placementsToCsv", () => {
-  it("formats header-less rows as id,x(4dp),y(4dp),0.0,CODE", () => {
+  it("prefixes a NR,X,Y,Z,Type header, then id,x(4dp),y(4dp),0.0,CODE rows", () => {
     const placements: Placement[] = [
       { id: "001", x: 123.456789, y: 456.7, typeIndex: 0 },
       { id: "002", x: 1, y: 2, typeIndex: 3 },
     ];
-    expect(placementsToCsv(placements)).toBe(
-      "001,123.4568,456.7000,0.0,BOR05\n002,1.0000,2.0000,0.0,PB",
+    expect(placementsToCsv(placements, drillTypes)).toBe(
+      "NR,X,Y,Z,Type\n001,123.4568,456.7000,0.0,BOR05\n002,1.0000,2.0000,0.0,PB",
     );
   });
 
-  it("maps each typeIndex to the right measurement code", () => {
+  it("maps each typeIndex to the right drill-type code", () => {
     const placements: Placement[] = [
       { id: "001", x: 0, y: 0, typeIndex: 0 },
       { id: "002", x: 0, y: 0, typeIndex: 1 },
       { id: "003", x: 0, y: 0, typeIndex: 2 },
       { id: "004", x: 0, y: 0, typeIndex: 3 },
     ];
-    const codes = placementsToCsv(placements)
+    const codes = placementsToCsv(placements, drillTypes)
       .split("\n")
+      .slice(1) // drop the header row
       .map((line) => line.split(",")[4]);
     expect(codes).toEqual(["BOR05", "BOR10", "BOR20", "PB"]);
   });
 
-  it("returns an empty string for no placements", () => {
-    expect(placementsToCsv([])).toBe("");
+  it("returns just the header row for no placements", () => {
+    expect(placementsToCsv([], drillTypes)).toBe("NR,X,Y,Z,Type");
   });
 });
 

@@ -3,34 +3,50 @@ export interface Point {
   y: number;
 }
 
-/**
- * The four measurement types, in the same order the legacy script used
- * (`['BOR05', 'BOR10', 'BOR20', 'PB']`). Colors use the cartographic
- * geological ramp: depth darkens (sand/ochre → sienna → rust/umber) and the
- * monitoring well is the cool slate-teal outlier.
- */
-export const MEASUREMENT_TYPES = [
-  { code: "BOR05", color: "#d2a24c" },
-  { code: "BOR10", color: "#bf7233" },
-  { code: "BOR20", color: "#8f3f1f" },
-  { code: "PB", color: "#2f6b73" },
-] as const;
+/** The marker shapes a drill type can be drawn with. */
+export type DrillSymbol = "circle" | "square" | "triangle" | "diamond";
+export const DRILL_SYMBOLS: DrillSymbol[] = ["circle", "square", "triangle", "diamond"];
 
-export type MeasurementCode = (typeof MEASUREMENT_TYPES)[number]["code"];
+/** A user-customizable kind of drill (name, color, marker shape). */
+export interface DrillType {
+  /** Stable id — React keys, survives rename/reorder. */
+  id: string;
+  /** Editable short name shown as the chip, e.g. "bo05". */
+  code: string;
+  /** Hex fill color. */
+  color: string;
+  /** Marker shape. */
+  symbol: DrillSymbol;
+}
+
+/**
+ * The default drill types: five borings to 0.5/1.0/1.5/2.0/3.0 m plus a peilbuis
+ * (monitoring well). Colors use the cartographic geological ramp — depth darkens
+ * (sand/ochre → sienna → rust/umber) — and the peilbuis is the cool slate-teal outlier,
+ * drawn as a triangle so it stands out from the circular borings.
+ */
+export const DEFAULT_DRILL_TYPES: DrillType[] = [
+  { id: "bo05", code: "bo05", color: "#d2a24c", symbol: "circle" },
+  { id: "bo10", code: "bo10", color: "#c58a3d", symbol: "circle" },
+  { id: "bo15", code: "bo15", color: "#bf7233", symbol: "circle" },
+  { id: "bo20", code: "bo20", color: "#a85628", symbol: "circle" },
+  { id: "bo30", code: "bo30", color: "#8f3f1f", symbol: "circle" },
+  { id: "pb", code: "pb", color: "#2f6b73", symbol: "triangle" },
+];
 
 export interface Placement {
   /** Sequential id, e.g. "001". */
   id: string;
   x: number;
   y: number;
-  /** Index into MEASUREMENT_TYPES. */
+  /** Index into the drill-types list. */
   typeIndex: number;
 }
 
 export interface ComputeInput {
   /** Site outline vertices (in order). */
   polygon: Point[];
-  /** Number of holes per measurement type, aligned with MEASUREMENT_TYPES. */
+  /** Number of holes per drill type, aligned with the drill-types list. */
   counts: number[];
   /** Grid resolution used to sample candidate points (default 200). */
   gridResolution?: number;
@@ -66,8 +82,10 @@ export interface RouteOptions {
   startIndex: number | null;
   /** Index of the hole to end at. Null ⇒ chosen automatically. Ignored on round trips. */
   endIndex: number | null;
-  /** When true, the route returns to the start (a closed loop). */
+  /** When true, the route returns to the start (a closed loop). Ignored for "northSouth". */
   roundTrip: boolean;
+  /** "route" = shortest walking route (TSP); "northSouth" = number strictly north→south. */
+  numbering: "route" | "northSouth";
 }
 
 /**
