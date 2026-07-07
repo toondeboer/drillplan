@@ -4,22 +4,21 @@ import { useCallback, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 
 interface FileUploadProps {
-  onFile: (file: File) => void;
+  onFiles: (files: File[]) => void;
   onExample: () => void;
   onDownloadExample: () => void;
 }
 
-export function FileUpload({ onFile, onExample, onDownloadExample }: FileUploadProps) {
+export function FileUpload({ onFiles, onExample, onDownloadExample }: FileUploadProps) {
   const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
   const handleFiles = useCallback(
     (files: FileList | null) => {
-      const file = files?.[0];
-      if (file) onFile(file);
+      if (files && files.length) onFiles(Array.from(files));
     },
-    [onFile],
+    [onFiles],
   );
 
   return (
@@ -62,7 +61,7 @@ export function FileUpload({ onFile, onExample, onDownloadExample }: FileUploadP
             <path d="M7.5 14h6M7.5 18h9" />
           </svg>
           <span className="font-mono text-xs font-semibold tracking-[0.04em] text-clay">
-            .CSV
+            .CSV / .SHP
           </span>
         </span>
         <p className="text-[14.5px] font-semibold text-ink">{t.dropHere}</p>
@@ -73,7 +72,8 @@ export function FileUpload({ onFile, onExample, onDownloadExample }: FileUploadP
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,text/csv"
+          multiple
+          accept=".csv,text/csv,.shp,.shx,.dbf,.prj,.cpg,.qmd"
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
         />

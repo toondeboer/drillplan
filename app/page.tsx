@@ -8,6 +8,7 @@ import { MeasurementControls } from "@/components/MeasurementControls";
 import { ProgressBar } from "@/components/ProgressBar";
 import { SitePlot, type SitePlotHandle } from "@/components/SitePlot";
 import { downloadFile, parseAreaCsv, placementsToCsv, polygonToCsv } from "@/lib/csv";
+import { parseAreaShapefile } from "@/lib/shapefile";
 import { generateExamplePolygon } from "@/lib/exampleArea";
 import { optimizeRoute } from "@/lib/algorithm/route";
 import {
@@ -110,17 +111,27 @@ export default function Home() {
     [result],
   );
 
-  const loadFile = useCallback(async (file: File) => {
+  const loadFiles = useCallback(async (files: File[]) => {
     setError(null);
     setResult(null);
     setStatus("idle");
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
+    // A shapefile arrives as several sibling files; the .shp carries the geometry.
+    // A CSV arrives on its own. Pick the source file by extension.
+    const shp = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
+    const csv = files.find((f) => f.name.toLowerCase().endsWith(".csv"));
+    const source = shp ?? csv ?? (files.length === 1 ? files[0] : undefined);
     try {
-      const { polygon } = await parseAreaCsv(file);
+      if (!source) {
+        throw new Error("Upload a CSV, or a shapefile's .shp file.");
+      }
+      const { polygon } = shp
+        ? await parseAreaShapefile(shp)
+        : await parseAreaCsv(source);
       setPolygon(polygon);
-      setFileName(file.name);
+      setFileName(source.name);
     } catch (err) {
       setPolygon(null);
       setStatus("error");
@@ -341,7 +352,7 @@ export default function Home() {
               </div>
             ) : (
               <FileUpload
-                onFile={loadFile}
+                onFiles={loadFiles}
                 onExample={loadExample}
                 onDownloadExample={handleDownloadExample}
               />
