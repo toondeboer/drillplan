@@ -79,6 +79,8 @@ describe("compute", () => {
     });
     expect(result.animation).toBeDefined();
     const anim = result.animation!;
+    expect(anim.kind).toBe("kmeans");
+    if (anim.kind !== "kmeans") throw new Error("expected a k-means animation");
     expect(anim.frames.length).toBeGreaterThanOrEqual(1);
     // Each frame has one centroid per placement.
     for (const frame of anim.frames) {
@@ -87,6 +89,47 @@ describe("compute", () => {
     // Grid is downsampled to the display cap.
     expect(anim.gridPoints.length).toBeGreaterThan(0);
     expect(anim.gridPoints.length).toBeLessThanOrEqual(2500);
+  });
+
+  it("places holes on a raster in grid mode, numbered and grouped by type", () => {
+    const result = compute({
+      polygon: square,
+      counts: [3, 2, 1, 0],
+      mode: "grid",
+      iterations: 200,
+      refine: false,
+    });
+
+    expect(result.placements).toHaveLength(6);
+    expect(result.placements.map((p) => p.id)).toEqual([
+      "001", "002", "003", "004", "005", "006",
+    ]);
+    expect(result.placements.map((p) => p.typeIndex)).toEqual([0, 0, 0, 1, 1, 2]);
+    for (const p of result.placements) {
+      expect(p.x).toBeGreaterThanOrEqual(0);
+      expect(p.x).toBeLessThanOrEqual(100);
+      expect(p.y).toBeGreaterThanOrEqual(0);
+      expect(p.y).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("captures a grid animation payload in grid mode", () => {
+    const result = compute({
+      polygon: square,
+      counts: [4, 3, 2, 0],
+      mode: "grid",
+      iterations: 200,
+      refine: false,
+      captureAnimation: true,
+    });
+    const anim = result.animation!;
+    expect(anim.kind).toBe("grid");
+    if (anim.kind !== "grid") throw new Error("expected a grid animation");
+    // The interior lattice points equal the placed holes.
+    expect(anim.points).toHaveLength(result.placements.length);
+    expect(anim.spacing).toBeGreaterThan(0);
+    expect(anim.angle).toBeGreaterThanOrEqual(0);
+    expect(anim.angle).toBeLessThan(Math.PI / 2);
   });
 
   it("reports progress for the grid, kmeans and optimize phases", () => {

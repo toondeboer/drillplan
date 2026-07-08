@@ -1,12 +1,14 @@
 import { sampleInteriorGrid } from "./geometry";
+import { computeGrid } from "./grid";
 import { kMeansWithHistory } from "./kmeans";
 import { optimize } from "./optimize";
 import type {
   ComputeInput,
   ComputeResult,
   ComputePhase,
-  KMeansAnimation,
+  PlacementAnimation,
   Placement,
+  Point,
 } from "./types";
 
 export interface ComputeCallbacks {
@@ -31,6 +33,7 @@ const ANIMATION_GRID_RESOLUTION = 48;
  */
 export function compute(input: ComputeInput, callbacks: ComputeCallbacks = {}): ComputeResult {
   const { polygon, counts } = input;
+  const mode = input.mode ?? "kmeans";
   const resolution = input.gridResolution ?? 200;
   const iterations = input.iterations ?? 20000;
   const refine = input.refine ?? true;
@@ -39,22 +42,50 @@ export function compute(input: ComputeInput, callbacks: ComputeCallbacks = {}): 
   if (polygon.length < 3) throw new Error("The area needs at least 3 points.");
   if (total < 1) throw new Error("Choose at least one hole to place.");
 
-  const candidates = sampleInteriorGrid(polygon, resolution, (f) =>
-    callbacks.onProgress?.("grid", f),
-  );
-  if (candidates.length < total) {
-    throw new Error(
-      `The area is too small or too thin for ${total} holes (only ${candidates.length} candidate points found). Try a larger area or fewer holes.`,
+  // Stage 1 — generate `total` evenly distributed candidate centers, either by clustering
+  // an interior sample (k-means) or by fitting a regular raster to the site (grid).
+  let centers: Point[];
+  let candidateCount: number;
+  let animation: PlacementAnimation | undefined;
+
+  if (mode === "grid") {
+    const grid = computeGrid(polygon, total, {
+      onProgress: (f) => callbacks.onProgress?.("grid", f),
+    });
+    centers = grid.centers;
+    candidateCount = grid.centers.length + grid.trimmed.length;
+    animation = input.captureAnimation
+      ? {
+          kind: "grid",
+          angle: grid.arrangement.angle,
+          spacing: grid.arrangement.spacing,
+          origin: grid.arrangement.origin,
+          points: grid.centers,
+          rejected: [...grid.rejected, ...grid.trimmed],
+        }
+      : undefined;
+  } else {
+    const candidates = sampleInteriorGrid(polygon, resolution, (f) =>
+      callbacks.onProgress?.("grid", f),
     );
+    if (candidates.length < total) {
+      throw new Error(
+        `The area is too small or too thin for ${total} holes (only ${candidates.length} candidate points found). Try a larger area or fewer holes.`,
+      );
+    }
+    callbacks.onProgress?.("kmeans", 0);
+    const km = kMeansWithHistory(candidates, total);
+    callbacks.onProgress?.("kmeans", 1);
+    centers = km.centers;
+    candidateCount = candidates.length;
+    animation = input.captureAnimation
+      ? {
+          kind: "kmeans",
+          gridPoints: sampleInteriorGrid(polygon, ANIMATION_GRID_RESOLUTION),
+          frames: km.frames,
+        }
+      : undefined;
   }
-
-  callbacks.onProgress?.("kmeans", 0);
-  const { centers, frames } = kMeansWithHistory(candidates, total);
-  callbacks.onProgress?.("kmeans", 1);
-
-  const animation: KMeansAnimation | undefined = input.captureAnimation
-    ? { gridPoints: sampleInteriorGrid(polygon, ANIMATION_GRID_RESOLUTION), frames }
-    : undefined;
 
   const { assignment, score } = optimize(centers, counts, {
     iterations,
@@ -80,5 +111,5 @@ export function compute(input: ComputeInput, callbacks: ComputeCallbacks = {}): 
     }
   }
 
-  return { placements, score, candidateCount: candidates.length, animation };
+  return { placements, score, candidateCount, animation };
 }

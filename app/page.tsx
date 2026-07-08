@@ -18,6 +18,7 @@ import {
   type ComputeResult,
   type DrillType,
   type Placement,
+  type PlacementMode,
   type Point,
   type RouteOptions,
   type WorkerOutMessage,
@@ -113,6 +114,32 @@ function CardTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Tiny preview of each placement layout: an organic scatter vs a (slightly angled) raster. */
+function LayoutIcon({ mode }: { mode: PlacementMode }) {
+  if (mode === "grid") {
+    const cells = [6, 13, 20];
+    return (
+      <svg width="24" height="24" viewBox="0 0 26 26" fill="none" aria-hidden>
+        <g transform="rotate(12 13 13)">
+          {cells.flatMap((x) =>
+            cells.map((y) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.7" fill="currentColor" />),
+          )}
+        </g>
+      </svg>
+    );
+  }
+  const pts = [
+    [6, 8], [13, 5], [20, 9], [8, 17], [16, 19], [22, 14],
+  ];
+  return (
+    <svg width="24" height="24" viewBox="0 0 26 26" fill="none" aria-hidden>
+      {pts.map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r="1.7" fill="currentColor" />
+      ))}
+    </svg>
+  );
+}
+
 /** Pill-button styling for the route controls, mirroring the Legend pills. */
 function routePill(active: boolean, disabled = false): string {
   return `inline-flex items-center gap-1.5 rounded-full border px-[11px] py-1 font-mono text-xs font-semibold transition ${
@@ -153,6 +180,10 @@ export default function Home() {
   const [highlightedType, setHighlightedType] = useState<number | null>(null);
   const [routeOptions, setRouteOptions] = useState<RouteOptions>(DEFAULT_ROUTE_OPTIONS);
   const [pickMode, setPickMode] = useState<PickMode>(null);
+  // How the next compute distributes holes: evenly-spread (k-means) or a regular raster.
+  const [mode, setMode] = useState<PlacementMode>("kmeans");
+  // Whether the drilling route path (lines/numbers/endpoints) is drawn over the holes.
+  const [showPath, setShowPath] = useState(true);
 
   const plotRef = useRef<SitePlotHandle>(null);
 
@@ -230,7 +261,7 @@ export default function Home() {
       new URL("../workers/compute.worker.ts", import.meta.url),
       { type: "module" },
     );
-    const input: ComputeInput = { polygon, counts, captureAnimation: true };
+    const input: ComputeInput = { polygon, counts, mode, captureAnimation: true };
 
     worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
       const msg = e.data;
@@ -251,7 +282,7 @@ export default function Home() {
       worker.terminate();
     };
     worker.postMessage(input);
-  }, [polygon, counts, total]);
+  }, [polygon, counts, total, mode]);
 
   const handleDownloadCsv = useCallback(() => {
     if (!routedPlacements) return;
@@ -264,7 +295,11 @@ export default function Home() {
   // Add a drill type (with a count of 0). Existing type indices are unchanged, so any current
   // result stays valid — no recompute needed until the user gives it a count.
   const addDrillType = useCallback(() => {
-    const palette = ["#7a9b57", "#4c78a8", "#9a5ea8", "#c26b3e", "#5a8a8f"];
+    // Distinct categorical hues (matching the default types, extended with magenta/orange)
+    // so an added type is clearly separable from the others rather than a near-duplicate.
+    const palette = [
+      "#2a6fd0", "#2e8b3d", "#b7791d", "#c0392b", "#7b3ff2", "#0d9488", "#d1478b", "#e0722c",
+    ];
     setDrillTypes((types) => {
       const next: DrillType[] = [
         ...types,
@@ -320,10 +355,12 @@ export default function Home() {
   }, [result]);
 
   // Replay the route-only animation so a re-optimization is always visible. Guarded so it
-  // only fires once there is a result on screen.
+  // only fires once there is a result on screen, and skipped when the path is hidden (there
+  // is nothing to animate — the routed order still updates the export and static view).
   const replayRoute = useCallback(() => {
+    if (!showPath) return;
     setStatus((s) => (s === "done" || s === "routing" ? "routing" : s));
-  }, []);
+  }, [showPath]);
 
   // Map a clicked hole (routed index) back to its stable original index, then set it as the
   // route's start or end. The route re-optimizes instantly via the `routed` memo.
@@ -398,11 +435,11 @@ export default function Home() {
               strokeWidth="2"
               strokeLinejoin="round"
             />
-            <circle cx="13" cy="17" r="2.5" fill="#d2a24c" />
-            <circle cx="27" cy="13" r="2.5" fill="#bf7233" />
-            <circle cx="20.5" cy="23" r="2.5" fill="#8f3f1f" />
-            <circle cx="14" cy="28" r="2.5" fill="#2f6b73" />
-            <circle cx="30" cy="25" r="2.5" fill="#bd5a2e" />
+            <circle cx="13" cy="17" r="2.5" fill="#2a6fd0" />
+            <circle cx="27" cy="13" r="2.5" fill="#b7791d" />
+            <circle cx="20.5" cy="23" r="2.5" fill="#c0392b" />
+            <circle cx="14" cy="28" r="2.5" fill="#0d9488" />
+            <circle cx="30" cy="25" r="2.5" fill="#7b3ff2" />
           </svg>
           <div className="leading-[1.05]">
             <div className="text-[19px] font-bold tracking-[-0.02em] text-ink">
@@ -497,6 +534,42 @@ export default function Home() {
               onEditType={editDrillType}
             />
 
+            {/* Placement layout — how the holes are distributed, chosen before computing. */}
+            <div className="mt-[18px]">
+              <span className="mb-2 block font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
+                {t.layoutLabel}
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    { m: "kmeans" as const, label: t.layoutOptimized, hint: t.layoutOptimizedHint },
+                    { m: "grid" as const, label: t.layoutGrid, hint: t.layoutGridHint },
+                  ]
+                ).map(({ m, label, hint }) => {
+                  const active = mode === m;
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setMode(m)}
+                      className={`flex flex-col gap-1.5 rounded-[11px] border p-3 text-left transition ${
+                        active
+                          ? "border-clay bg-clay-soft-bg"
+                          : "border-hairline-2 bg-surface-inset hover:border-clay-soft-border"
+                      }`}
+                    >
+                      <span className={active ? "text-clay" : "text-ink-3"}>
+                        <LayoutIcon mode={m} />
+                      </span>
+                      <span className="text-[13px] font-semibold text-ink">{label}</span>
+                      <span className="text-[11.5px] leading-[1.4] text-ink-3">{hint}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="mt-4">
               {computing ? (
                 <ProgressBar label={t.computing} />
@@ -571,6 +644,7 @@ export default function Home() {
               onAnimationDone={handleAnimationDone}
               highlightType={highlightedType}
               route={routed}
+              showPath={showPath}
               pickMode={status === "done" || status === "routing" ? pickMode : null}
               onPickPoint={handlePickPoint}
             />
@@ -599,12 +673,39 @@ export default function Home() {
                       <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
                         {t.routeTitle}
                       </span>
-                      <span className="font-mono text-[13px] font-semibold text-ink">
+                      <span
+                        className={`font-mono text-[13px] font-semibold text-ink transition ${
+                          showPath ? "" : "opacity-40"
+                        }`}
+                      >
                         {`${Math.round(routed.length).toLocaleString()} m`}
                       </span>
-                      {status === "routing" && (
+                      {status === "routing" && showPath && (
                         <span className="font-mono text-[11px] text-clay">{t.optimizing}</span>
                       )}
+                      {/* Show / hide the route path (lines, numbers, endpoints) on the map. */}
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={showPath}
+                        onClick={() => setShowPath((v) => !v)}
+                        className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-hairline-2 bg-surface px-2.5 py-1 transition hover:border-clay-soft-border"
+                      >
+                        <span
+                          className={`relative h-[16px] w-[28px] rounded-full transition-colors ${
+                            showPath ? "bg-clay" : "bg-divider"
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-[2px] h-[12px] w-[12px] rounded-full bg-white transition-all ${
+                              showPath ? "left-[14px]" : "left-[2px]"
+                            }`}
+                          />
+                        </span>
+                        <span className="font-mono text-xs font-semibold text-ink-2">
+                          {t.showPathLabel}
+                        </span>
+                      </button>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {/* Numbering mode: shortest route (TSP) vs strictly north→south */}

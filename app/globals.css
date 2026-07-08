@@ -29,11 +29,11 @@
   --color-clay-soft-bg-2: rgba(189, 90, 46, 0.1);
   --color-clay-soft-border: rgba(189, 90, 46, 0.22);
 
-  /* Measurement-type colors — geological ramp */
-  --color-bor05: #d2a24c;
-  --color-bor10: #bf7233;
-  --color-bor20: #8f3f1f;
-  --color-pb: #2f6b73;
+  /* Measurement-type colors — distinct categorical hues (CVD-safe, ≥3:1 on paper) */
+  --color-bor05: #2a6fd0;
+  --color-bor10: #2e8b3d;
+  --color-bor20: #c0392b;
+  --color-pb: #0d9488;
 }
 
 :root {
