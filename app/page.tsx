@@ -187,6 +187,8 @@ export default function Home() {
   const [showPath, setShowPath] = useState(true);
   // Grid mode: user-fixed raster angle (radians), or null to auto-pick the best angle.
   const [gridAngle, setGridAngle] = useState<number | null>(null);
+  // The raster-angle text field's in-progress value while it's being edited (null = not editing).
+  const [angleInput, setAngleInput] = useState<string | null>(null);
   const angleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // While turning the compass: show the outline + rotating raster (no holes) at this angle.
   const [rasterPreview, setRasterPreview] = useState<{ angle: number; spacing: number } | null>(null);
@@ -326,12 +328,30 @@ export default function Home() {
     [polygon, counts, total, runWorker],
   );
 
+  // Commit the typed raster angle (on Enter/blur) — deferring the recompute until the user is
+  // done typing, so the field isn't yanked away mid-entry by the replay animation.
+  const commitAngleInput = useCallback(() => {
+    setAngleInput((cur) => {
+      if (cur != null && cur.trim() !== "") {
+        const raw = parseFloat(cur);
+        const deg = Math.max(0, Math.min(90, Number.isFinite(raw) ? raw : 0)) % 90;
+        // Compare against the currently shown (rounded) angle; only recompute — and replay the
+        // animation — when it actually changed, so a focus/blur with no edit does nothing.
+        const shownDeg = Math.round((((gridAngle ?? result?.grid?.angle ?? 0) * 180) / Math.PI) % 90);
+        if (deg !== shownDeg) handleAngleChange((deg * Math.PI) / 180);
+      }
+      return null;
+    });
+  }, [handleAngleChange, gridAngle, result]);
+
   // Compass drag. Grab → show a live raster preview (holes hidden); drag → rotate the raster;
   // release → recompute the placement + route at the released angle (holes reappear).
   const beginTurn = useCallback(() => {
     if (!result?.grid) return;
     turningRef.current = true;
+    setAngleInput(null); // discard any half-typed value
     if (angleTimer.current) clearTimeout(angleTimer.current); // no debounced recompute mid-drag
+    setStatus((s) => (s === "animating" || s === "routing" ? "done" : s)); // cancel a running reveal
     setRasterPreview({ angle: gridAngle ?? result.grid.angle, spacing: result.grid.spacing });
   }, [result, gridAngle]);
 
@@ -502,6 +522,11 @@ export default function Home() {
   }, [fileName]);
 
   const computing = status === "computing";
+  // The fitted raster of the current result (grid mode only). Drives the always-visible compass.
+  const gridResult = mode === "grid" ? result?.grid ?? null : null;
+  const gridAngleDeg = gridResult
+    ? Math.round((((gridAngle ?? gridResult.angle) * 180) / Math.PI) % 90)
+    : 0;
 
   return (
     <div className="mx-auto max-w-[1180px] px-7 pb-[60px] pt-[26px]">
@@ -732,6 +757,61 @@ export default function Home() {
               onPickPoint={handlePickPoint}
             />
 
+            {/* Raster angle compass — grid layout only. Stays visible during the reveal so the
+                angle can be edited without the control disappearing. */}
+            {gridResult && (
+              <div className="mt-3 flex items-center gap-3.5 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-3">
+                <AngleDial
+                  angle={gridAngle ?? gridResult.angle}
+                  onChange={turnTo}
+                  onDragStart={beginTurn}
+                  onDragEnd={endTurn}
+                  title={t.gridAngleLabel}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
+                      {t.gridAngleLabel}
+                    </span>
+                    <div className="inline-flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={90}
+                        value={angleInput ?? String(gridAngleDeg)}
+                        onFocus={() => setAngleInput(String(gridAngleDeg))}
+                        onChange={(e) => setAngleInput(e.target.value)}
+                        onBlur={commitAngleInput}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.currentTarget.blur();
+                          else if (e.key === "Escape") {
+                            setAngleInput(null);
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        aria-label={t.gridAngleLabel}
+                        className="w-[46px] rounded-md border border-hairline bg-white px-1 py-[3px] text-center font-mono text-[14px] font-semibold text-ink outline-none focus:border-clay-soft-border"
+                      />
+                      <span className="font-mono text-[13px] font-semibold text-ink-3">°</span>
+                    </div>
+                    <button
+                      type="button"
+                      aria-pressed={gridAngle == null}
+                      onClick={() => handleAngleChange(null)}
+                      className={`inline-flex cursor-pointer items-center rounded-full border px-[11px] py-1 font-mono text-xs font-semibold transition ${
+                        gridAngle == null
+                          ? "border-clay bg-clay-soft-bg text-clay"
+                          : "border-hairline-2 bg-surface text-ink-2 hover:text-ink"
+                      }`}
+                    >
+                      {t.autoLabel}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[11.5px] leading-[1.4] text-ink-3">{t.gridAngleHint}</p>
+                </div>
+              </div>
+            )}
+
             {(status === "done" || status === "routing") && result && routed && (
               <>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-2.5">
@@ -748,55 +828,6 @@ export default function Home() {
                     </span>
                   </div>
                 </div>
-
-                {/* Raster angle compass — grid layout only. Turn it to rotate the raster. */}
-                {mode === "grid" && result.grid && (
-                  <div className="mt-3 flex items-center gap-3.5 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-3">
-                    <AngleDial
-                      angle={gridAngle ?? result.grid.angle}
-                      onChange={turnTo}
-                      onDragStart={beginTurn}
-                      onDragEnd={endTurn}
-                      title={t.gridAngleLabel}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
-                          {t.gridAngleLabel}
-                        </span>
-                        <div className="inline-flex items-center gap-1">
-                          <input
-                            type="number"
-                            min={0}
-                            max={90}
-                            value={Math.round((((gridAngle ?? result.grid.angle) * 180) / Math.PI) % 90)}
-                            onChange={(e) => {
-                              const raw = parseFloat(e.target.value);
-                              const deg = Math.max(0, Math.min(90, Number.isFinite(raw) ? raw : 0));
-                              handleAngleChange(((deg % 90) * Math.PI) / 180);
-                            }}
-                            aria-label={t.gridAngleLabel}
-                            className="w-[46px] rounded-md border border-hairline bg-white px-1 py-[3px] text-center font-mono text-[14px] font-semibold text-ink outline-none focus:border-clay-soft-border"
-                          />
-                          <span className="font-mono text-[13px] font-semibold text-ink-3">°</span>
-                        </div>
-                        <button
-                          type="button"
-                          aria-pressed={gridAngle == null}
-                          onClick={() => handleAngleChange(null)}
-                          className={`inline-flex cursor-pointer items-center rounded-full border px-[11px] py-1 font-mono text-xs font-semibold transition ${
-                            gridAngle == null
-                              ? "border-clay bg-clay-soft-bg text-clay"
-                              : "border-hairline-2 bg-surface text-ink-2 hover:text-ink"
-                          }`}
-                        >
-                          {t.autoLabel}
-                        </button>
-                      </div>
-                      <p className="mt-1 text-[11.5px] leading-[1.4] text-ink-3">{t.gridAngleHint}</p>
-                    </div>
-                  </div>
-                )}
 
                 {/* Drilling route (Traveling Salesman) controls */}
                 <div className="mt-3 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-[13px]">
