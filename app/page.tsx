@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AngleDial } from "@/components/AngleDial";
 import { FileUpload } from "@/components/FileUpload";
 import { Legend } from "@/components/Legend";
 import { LanguageToggle } from "@/components/LanguageToggle";
@@ -18,6 +19,7 @@ import {
   type ComputeResult,
   type DrillType,
   type Placement,
+  type PlacementMode,
   type Point,
   type RouteOptions,
   type WorkerOutMessage,
@@ -113,6 +115,32 @@ function CardTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Tiny preview of each placement layout: an organic scatter vs a (slightly angled) raster. */
+function LayoutIcon({ mode }: { mode: PlacementMode }) {
+  if (mode === "grid") {
+    const cells = [6, 13, 20];
+    return (
+      <svg width="24" height="24" viewBox="0 0 26 26" fill="none" aria-hidden>
+        <g transform="rotate(12 13 13)">
+          {cells.flatMap((x) =>
+            cells.map((y) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.7" fill="currentColor" />),
+          )}
+        </g>
+      </svg>
+    );
+  }
+  const pts = [
+    [6, 8], [13, 5], [20, 9], [8, 17], [16, 19], [22, 14],
+  ];
+  return (
+    <svg width="24" height="24" viewBox="0 0 26 26" fill="none" aria-hidden>
+      {pts.map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r="1.7" fill="currentColor" />
+      ))}
+    </svg>
+  );
+}
+
 /** Pill-button styling for the route controls, mirroring the Legend pills. */
 function routePill(active: boolean, disabled = false): string {
   return `inline-flex items-center gap-1.5 rounded-full border px-[11px] py-1 font-mono text-xs font-semibold transition ${
@@ -153,6 +181,18 @@ export default function Home() {
   const [highlightedType, setHighlightedType] = useState<number | null>(null);
   const [routeOptions, setRouteOptions] = useState<RouteOptions>(DEFAULT_ROUTE_OPTIONS);
   const [pickMode, setPickMode] = useState<PickMode>(null);
+  // How the next compute distributes holes: evenly-spread (k-means) or a regular raster.
+  const [mode, setMode] = useState<PlacementMode>("kmeans");
+  // Whether the drilling route path (lines/numbers/endpoints) is drawn over the holes.
+  const [showPath, setShowPath] = useState(true);
+  // Grid mode: user-fixed raster angle (radians), or null to auto-pick the best angle.
+  const [gridAngle, setGridAngle] = useState<number | null>(null);
+  // The raster-angle text field's in-progress value while it's being edited (null = not editing).
+  const [angleInput, setAngleInput] = useState<string | null>(null);
+  const angleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // While turning the compass: show the outline + rotating raster (no holes) at this angle.
+  const [rasterPreview, setRasterPreview] = useState<{ angle: number; spacing: number } | null>(null);
+  const turningRef = useRef(false);
 
   const plotRef = useRef<SitePlotHandle>(null);
 
@@ -181,6 +221,7 @@ export default function Home() {
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
+    setGridAngle(null);
     // A shapefile arrives as several sibling files; the .shp carries the geometry.
     // A CSV arrives on its own. Pick the source file by extension.
     const shp = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
@@ -209,12 +250,51 @@ export default function Home() {
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
+    setGridAngle(null);
     setPolygon(generateExamplePolygon());
     setFileName("example-site.csv");
   }, []);
 
+  // Switch the placement layout; reset any manual raster angle so a fresh layout auto-fits.
+  const handleSetMode = useCallback((m: PlacementMode) => {
+    setMode(m);
+    setGridAngle(null);
+  }, []);
+
   const handleDownloadExample = useCallback(() => {
     downloadFile("drillplan-example.csv", polygonToCsv(generateExamplePolygon()));
+  }, []);
+
+  // Run the compute worker for `input`. On a result we play the reveal animation (the raster
+  // settling into holes, then the route building) — so every recompute, including an angle
+  // change, replays the full animation.
+  const runWorker = useCallback((input: ComputeInput) => {
+    const worker = new Worker(
+      new URL("../workers/compute.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
+      const msg = e.data;
+      if (msg.type === "result") {
+        setResult(msg.result);
+        setStatus(msg.result.animation ? "animating" : "done");
+        setRasterPreview(null); // hand off from the turning preview to the reveal animation
+        worker.terminate();
+      } else if (msg.type === "error") {
+        setError(msg.message);
+        setStatus("error");
+        setRasterPreview(null);
+        worker.terminate();
+      }
+      // "progress" messages are ignored — the busy indicator is indeterminate.
+    };
+    worker.onerror = (e) => {
+      setError(e.message || "Worker error");
+      setStatus("error");
+      setRasterPreview(null);
+      worker.terminate();
+    };
+    worker.postMessage(input);
   }, []);
 
   const runCompute = useCallback(() => {
@@ -225,33 +305,84 @@ export default function Home() {
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
+    turningRef.current = false;
+    setRasterPreview(null);
+    if (angleTimer.current) clearTimeout(angleTimer.current); // drop any pending angle tweak
+    runWorker({ polygon, counts, mode, angleOverride: mode === "grid" ? gridAngle : null, captureAnimation: true });
+  }, [polygon, counts, total, mode, gridAngle, runWorker]);
 
-    const worker = new Worker(
-      new URL("../workers/compute.worker.ts", import.meta.url),
-      { type: "module" },
-    );
-    const input: ComputeInput = { polygon, counts, captureAnimation: true };
+  // Set the raster angle and (debounced) recompute the grid at it, replaying the reveal
+  // animation. Used by the keyboard, the Auto chip and the manual entry. `next === null`
+  // returns to the auto-picked best angle.
+  const handleAngleChange = useCallback(
+    (next: number | null) => {
+      setGridAngle(next);
+      if (!polygon || total < 1) return;
+      setHighlightedType(null);
+      setPickMode(null);
+      if (angleTimer.current) clearTimeout(angleTimer.current);
+      angleTimer.current = setTimeout(() => {
+        runWorker({ polygon, counts, mode: "grid", angleOverride: next, captureAnimation: true });
+      }, 140);
+    },
+    [polygon, counts, total, runWorker],
+  );
 
-    worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
-      const msg = e.data;
-      if (msg.type === "result") {
-        setResult(msg.result);
-        setStatus(msg.result.animation ? "animating" : "done");
-        worker.terminate();
-      } else if (msg.type === "error") {
-        setError(msg.message);
-        setStatus("error");
-        worker.terminate();
+  // Commit the typed raster angle (on Enter/blur) — deferring the recompute until the user is
+  // done typing, so the field isn't yanked away mid-entry by the replay animation.
+  const commitAngleInput = useCallback(() => {
+    setAngleInput((cur) => {
+      if (cur != null && cur.trim() !== "") {
+        const raw = parseFloat(cur);
+        const deg = Math.max(0, Math.min(90, Number.isFinite(raw) ? raw : 0)) % 90;
+        // Compare against the currently shown (rounded) angle; only recompute — and replay the
+        // animation — when it actually changed, so a focus/blur with no edit does nothing.
+        const shownDeg = Math.round((((gridAngle ?? result?.grid?.angle ?? 0) * 180) / Math.PI) % 90);
+        if (deg !== shownDeg) handleAngleChange((deg * Math.PI) / 180);
       }
-      // "progress" messages are ignored — the busy indicator is indeterminate.
-    };
-    worker.onerror = (e) => {
-      setError(e.message || "Worker error");
-      setStatus("error");
-      worker.terminate();
-    };
-    worker.postMessage(input);
-  }, [polygon, counts, total]);
+      return null;
+    });
+  }, [handleAngleChange, gridAngle, result]);
+
+  // Compass drag. Grab → show a live raster preview (holes hidden); drag → rotate the raster;
+  // release → recompute the placement + route at the released angle (holes reappear).
+  const beginTurn = useCallback(() => {
+    if (!result?.grid) return;
+    turningRef.current = true;
+    setAngleInput(null); // discard any half-typed value
+    if (angleTimer.current) clearTimeout(angleTimer.current); // no debounced recompute mid-drag
+    setStatus((s) => (s === "animating" || s === "routing" ? "done" : s)); // cancel a running reveal
+    setRasterPreview({ angle: gridAngle ?? result.grid.angle, spacing: result.grid.spacing });
+  }, [result, gridAngle]);
+
+  const turnTo = useCallback(
+    (next: number) => {
+      if (turningRef.current) {
+        setGridAngle(next);
+        setRasterPreview((p) => ({ angle: next, spacing: p?.spacing ?? result?.grid?.spacing ?? 0 }));
+      } else {
+        handleAngleChange(next); // keyboard: no live preview, just a debounced recompute
+      }
+    },
+    [result, handleAngleChange],
+  );
+
+  const endTurn = useCallback(
+    (next: number) => {
+      turningRef.current = false;
+      setGridAngle(next);
+      if (!polygon || total < 1) {
+        setRasterPreview(null);
+        return;
+      }
+      setHighlightedType(null);
+      setPickMode(null);
+      // The turning preview stays on screen until the result arrives, then the reveal animation
+      // plays (raster settles into holes, route builds) at the released angle.
+      runWorker({ polygon, counts, mode: "grid", angleOverride: next, captureAnimation: true });
+    },
+    [polygon, counts, total, runWorker],
+  );
 
   const handleDownloadCsv = useCallback(() => {
     if (!routedPlacements) return;
@@ -264,7 +395,11 @@ export default function Home() {
   // Add a drill type (with a count of 0). Existing type indices are unchanged, so any current
   // result stays valid — no recompute needed until the user gives it a count.
   const addDrillType = useCallback(() => {
-    const palette = ["#7a9b57", "#4c78a8", "#9a5ea8", "#c26b3e", "#5a8a8f"];
+    // Distinct categorical hues (matching the default types, extended with magenta/orange)
+    // so an added type is clearly separable from the others rather than a near-duplicate.
+    const palette = [
+      "#2a6fd0", "#2e8b3d", "#b7791d", "#c0392b", "#7b3ff2", "#0d9488", "#d1478b", "#e0722c",
+    ];
     setDrillTypes((types) => {
       const next: DrillType[] = [
         ...types,
@@ -297,6 +432,7 @@ export default function Home() {
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
+    setGridAngle(null);
   }, [persistDrillTypes]);
 
   // Edit a drill type's appearance (name/color/symbol). The index is unchanged, so the current
@@ -320,10 +456,12 @@ export default function Home() {
   }, [result]);
 
   // Replay the route-only animation so a re-optimization is always visible. Guarded so it
-  // only fires once there is a result on screen.
+  // only fires once there is a result on screen, and skipped when the path is hidden (there
+  // is nothing to animate — the routed order still updates the export and static view).
   const replayRoute = useCallback(() => {
+    if (!showPath) return;
     setStatus((s) => (s === "done" || s === "routing" ? "routing" : s));
-  }, []);
+  }, [showPath]);
 
   // Map a clicked hole (routed index) back to its stable original index, then set it as the
   // route's start or end. The route re-optimizes instantly via the `routed` memo.
@@ -384,6 +522,11 @@ export default function Home() {
   }, [fileName]);
 
   const computing = status === "computing";
+  // The fitted raster of the current result (grid mode only). Drives the always-visible compass.
+  const gridResult = mode === "grid" ? result?.grid ?? null : null;
+  const gridAngleDeg = gridResult
+    ? Math.round((((gridAngle ?? gridResult.angle) * 180) / Math.PI) % 90)
+    : 0;
 
   return (
     <div className="mx-auto max-w-[1180px] px-7 pb-[60px] pt-[26px]">
@@ -398,11 +541,11 @@ export default function Home() {
               strokeWidth="2"
               strokeLinejoin="round"
             />
-            <circle cx="13" cy="17" r="2.5" fill="#d2a24c" />
-            <circle cx="27" cy="13" r="2.5" fill="#bf7233" />
-            <circle cx="20.5" cy="23" r="2.5" fill="#8f3f1f" />
-            <circle cx="14" cy="28" r="2.5" fill="#2f6b73" />
-            <circle cx="30" cy="25" r="2.5" fill="#bd5a2e" />
+            <circle cx="13" cy="17" r="2.5" fill="#2a6fd0" />
+            <circle cx="27" cy="13" r="2.5" fill="#b7791d" />
+            <circle cx="20.5" cy="23" r="2.5" fill="#c0392b" />
+            <circle cx="14" cy="28" r="2.5" fill="#0d9488" />
+            <circle cx="30" cy="25" r="2.5" fill="#7b3ff2" />
           </svg>
           <div className="leading-[1.05]">
             <div className="text-[19px] font-bold tracking-[-0.02em] text-ink">
@@ -455,6 +598,7 @@ export default function Home() {
                     setError(null);
                     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
                     setPickMode(null);
+                    setGridAngle(null);
                   }}
                   className="cursor-pointer text-[13px] font-medium text-ink-3 transition hover:text-ink"
                 >
@@ -496,6 +640,42 @@ export default function Home() {
               onDeleteType={deleteDrillType}
               onEditType={editDrillType}
             />
+
+            {/* Placement layout — how the holes are distributed, chosen before computing. */}
+            <div className="mt-[18px]">
+              <span className="mb-2 block font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
+                {t.layoutLabel}
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    { m: "kmeans" as const, label: t.layoutOptimized, hint: t.layoutOptimizedHint },
+                    { m: "grid" as const, label: t.layoutGrid, hint: t.layoutGridHint },
+                  ]
+                ).map(({ m, label, hint }) => {
+                  const active = mode === m;
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => handleSetMode(m)}
+                      className={`flex flex-col gap-1.5 rounded-[11px] border p-3 text-left transition ${
+                        active
+                          ? "border-clay bg-clay-soft-bg"
+                          : "border-hairline-2 bg-surface-inset hover:border-clay-soft-border"
+                      }`}
+                    >
+                      <span className={active ? "text-clay" : "text-ink-3"}>
+                        <LayoutIcon mode={m} />
+                      </span>
+                      <span className="text-[13px] font-semibold text-ink">{label}</span>
+                      <span className="text-[11.5px] leading-[1.4] text-ink-3">{hint}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             <div className="mt-4">
               {computing ? (
@@ -571,9 +751,66 @@ export default function Home() {
               onAnimationDone={handleAnimationDone}
               highlightType={highlightedType}
               route={routed}
+              showPath={showPath}
+              rasterPreview={rasterPreview}
               pickMode={status === "done" || status === "routing" ? pickMode : null}
               onPickPoint={handlePickPoint}
             />
+
+            {/* Raster angle compass — grid layout only. Stays visible during the reveal so the
+                angle can be edited without the control disappearing. */}
+            {gridResult && (
+              <div className="mt-3 flex items-center gap-3.5 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-3">
+                <AngleDial
+                  angle={gridAngle ?? gridResult.angle}
+                  onChange={turnTo}
+                  onDragStart={beginTurn}
+                  onDragEnd={endTurn}
+                  title={t.gridAngleLabel}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
+                      {t.gridAngleLabel}
+                    </span>
+                    <div className="inline-flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={90}
+                        value={angleInput ?? String(gridAngleDeg)}
+                        onFocus={() => setAngleInput(String(gridAngleDeg))}
+                        onChange={(e) => setAngleInput(e.target.value)}
+                        onBlur={commitAngleInput}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.currentTarget.blur();
+                          else if (e.key === "Escape") {
+                            setAngleInput(null);
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        aria-label={t.gridAngleLabel}
+                        className="w-[46px] rounded-md border border-hairline bg-white px-1 py-[3px] text-center font-mono text-[14px] font-semibold text-ink outline-none focus:border-clay-soft-border"
+                      />
+                      <span className="font-mono text-[13px] font-semibold text-ink-3">°</span>
+                    </div>
+                    <button
+                      type="button"
+                      aria-pressed={gridAngle == null}
+                      onClick={() => handleAngleChange(null)}
+                      className={`inline-flex cursor-pointer items-center rounded-full border px-[11px] py-1 font-mono text-xs font-semibold transition ${
+                        gridAngle == null
+                          ? "border-clay bg-clay-soft-bg text-clay"
+                          : "border-hairline-2 bg-surface text-ink-2 hover:text-ink"
+                      }`}
+                    >
+                      {t.autoLabel}
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[11.5px] leading-[1.4] text-ink-3">{t.gridAngleHint}</p>
+                </div>
+              </div>
+            )}
 
             {(status === "done" || status === "routing") && result && routed && (
               <>
@@ -599,12 +836,39 @@ export default function Home() {
                       <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
                         {t.routeTitle}
                       </span>
-                      <span className="font-mono text-[13px] font-semibold text-ink">
+                      <span
+                        className={`font-mono text-[13px] font-semibold text-ink transition ${
+                          showPath ? "" : "opacity-40"
+                        }`}
+                      >
                         {`${Math.round(routed.length).toLocaleString()} m`}
                       </span>
-                      {status === "routing" && (
+                      {status === "routing" && showPath && (
                         <span className="font-mono text-[11px] text-clay">{t.optimizing}</span>
                       )}
+                      {/* Show / hide the route path (lines, numbers, endpoints) on the map. */}
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={showPath}
+                        onClick={() => setShowPath((v) => !v)}
+                        className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-hairline-2 bg-surface px-2.5 py-1 transition hover:border-clay-soft-border"
+                      >
+                        <span
+                          className={`relative h-[16px] w-[28px] rounded-full transition-colors ${
+                            showPath ? "bg-clay" : "bg-divider"
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-[2px] h-[12px] w-[12px] rounded-full bg-white transition-all ${
+                              showPath ? "left-[14px]" : "left-[2px]"
+                            }`}
+                          />
+                        </span>
+                        <span className="font-mono text-xs font-semibold text-ink-2">
+                          {t.showPathLabel}
+                        </span>
+                      </button>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {/* Numbering mode: shortest route (TSP) vs strictly north→south */}

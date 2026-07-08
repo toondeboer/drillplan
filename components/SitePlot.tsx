@@ -13,7 +13,7 @@ import { getBounds, type Bounds } from "@/lib/algorithm/geometry";
 import {
   type DrillSymbol,
   type DrillType,
-  type KMeansAnimation,
+  type PlacementAnimation,
   type Placement,
   type Point,
   type RoutePlan,
@@ -44,6 +44,10 @@ const STEP_MIN_MS = 90;
 const STEP_MAX_MS = 360;
 const REVEAL_MS = 650; // fade grid out, color into the final result
 
+// Grid (raster) reveal, an alternative to the k-means stages.
+const RASTER_SWEEP_MS = 900; // draw the raster lines + intersections left → right
+const RASTER_POP_MS = 380; // settle the interior intersections before coloring
+
 // Route (Traveling Salesman) animation, played straight after the k-means reveal.
 const ROUTE_MARK_MS = 480; // pulse the start hole before building
 const ROUTE_BUILD_TARGET_MS = 1900; // budget for the greedy nearest-neighbor build
@@ -65,6 +69,9 @@ const ROUTE = {
   end: "#2f6b73", // slate-teal end ring
 } as const;
 
+/** Fitted-raster line color (a soft clay, distinct from the neutral graticule). */
+const RASTER_LINE = "rgba(189,90,46,0.30)";
+
 export interface SitePlotHandle {
   toPng: () => string | null;
   /** Jump the running k-means animation straight to the final result. */
@@ -76,14 +83,21 @@ interface SitePlotProps {
   placements?: Placement[];
   /** The drill-type definitions (color + shape), indexed by `Placement.typeIndex`. */
   drillTypes: DrillType[];
-  animation?: KMeansAnimation | null;
-  /** "full" plays k-means + route; "route" replays only the route; false stays static. */
+  animation?: PlacementAnimation | null;
+  /** "full" plays the layout reveal + route; "route" replays only the route; false stays static. */
   animate?: "full" | "route" | false;
   onAnimationDone?: () => void;
   /** When set, only placements of this measurement-type index are emphasized. */
   highlightType?: number | null;
   /** The drilling route to overlay + animate. `placements` must already be its order. */
   route?: RoutePlan | null;
+  /** When false, the route path (lines, numbers, start/end) is hidden — just the holes. */
+  showPath?: boolean;
+  /**
+   * While the raster compass is being turned: show the outline + raster at this angle/spacing
+   * with no holes or route. Overrides the normal static render. Null ⇒ render holes as usual.
+   */
+  rasterPreview?: { angle: number; spacing: number } | null;
   /** When set, clicking a hole reports its index via `onPickPoint` (start/end selection). */
   pickMode?: "start" | "end" | null;
   onPickPoint?: (placementIndex: number) => void;
@@ -406,6 +420,46 @@ function drawStatic(
   drawScaleAndNorth(ctx, projector, monoFamily);
 }
 
+/** Signed-area centroid of a polygon; falls back to the bbox center when degenerate. */
+function polygonCentroid(polygon: Point[], bounds: Bounds): Point {
+  let a = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const cross = polygon[j].x * polygon[i].y - polygon[i].x * polygon[j].y;
+    a += cross;
+    cx += (polygon[j].x + polygon[i].x) * cross;
+    cy += (polygon[j].y + polygon[i].y) * cross;
+  }
+  a /= 2;
+  if (Math.abs(a) < 1e-9) {
+    return { x: (bounds.minX + bounds.maxX) / 2, y: (bounds.minY + bounds.maxY) / 2 };
+  }
+  return { x: cx / (6 * a), y: cy / (6 * a) };
+}
+
+/**
+ * The raster-orientation preview shown while the compass is being turned: the site outline
+ * plus the perpendicular raster at `angle`/`spacing`, without any holes or route — so the
+ * user sees the grid rotate live before the placement is recomputed on release.
+ */
+function drawRasterPreview(
+  ctx: CanvasRenderingContext2D,
+  polygon: Point[],
+  projector: Projector,
+  monoFamily: string,
+  angle: number,
+  spacing: number,
+) {
+  drawBackground(ctx);
+  drawGraticule(ctx, projector, monoFamily);
+  drawFrame(ctx);
+  drawPolygon(ctx, polygon, projector);
+  const origin = polygonCentroid(polygon, projector.bounds);
+  drawRasterLines(ctx, projector, angle, spacing, origin, polygon, null, 1);
+  drawScaleAndNorth(ctx, projector, monoFamily);
+}
+
 function drawGridDots(
   ctx: CanvasRenderingContext2D,
   points: Point[],
@@ -426,6 +480,96 @@ function drawGridDots(
     ctx.beginPath();
     ctx.arc(sx, sy, GRID_DOT_R, 0, Math.PI * 2);
     ctx.fill();
+  }
+  ctx.restore();
+}
+
+/**
+ * Draw the fitted raster: two families of perpendicular, evenly spaced lines at the grid's
+ * angle, clipped to the site polygon (so the raster reads as laid over the ground). When
+ * `revealScreenX` is set, only the part left of that screen x is drawn, for the sweep-in.
+ */
+function drawRasterLines(
+  ctx: CanvasRenderingContext2D,
+  projector: Projector,
+  angle: number,
+  s: number,
+  origin: Point,
+  polygon: Point[],
+  revealScreenX: number | null,
+  alpha: number,
+) {
+  if (alpha <= 0 || s <= 0) return;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const b = projector.bounds;
+
+  // Lattice-index range covering the bounding box (matches grid.ts latticeRange).
+  let iMin = Infinity;
+  let iMax = -Infinity;
+  let jMin = Infinity;
+  let jMax = -Infinity;
+  for (const [x, y] of [
+    [b.minX, b.minY],
+    [b.maxX, b.minY],
+    [b.maxX, b.maxY],
+    [b.minX, b.maxY],
+  ]) {
+    const dx = x - origin.x;
+    const dy = y - origin.y;
+    const a = (dx * cos + dy * sin) / s;
+    const c = (-dx * sin + dy * cos) / s;
+    if (a < iMin) iMin = a;
+    if (a > iMax) iMax = a;
+    if (c < jMin) jMin = c;
+    if (c > jMax) jMax = c;
+  }
+  iMin = Math.floor(iMin) - 1;
+  iMax = Math.ceil(iMax) + 1;
+  jMin = Math.floor(jMin) - 1;
+  jMax = Math.ceil(jMax) + 1;
+
+  const world = (i: number, j: number): [number, number] =>
+    projector.project({
+      x: origin.x + i * s * cos - j * s * sin,
+      y: origin.y + i * s * sin + j * s * cos,
+    });
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // Clip to the polygon, then optionally to the swept-in region.
+  ctx.beginPath();
+  polygon.forEach((p, idx) => {
+    const [sx, sy] = projector.project(p);
+    if (idx === 0) ctx.moveTo(sx, sy);
+    else ctx.lineTo(sx, sy);
+  });
+  ctx.closePath();
+  ctx.clip();
+  if (revealScreenX != null) {
+    ctx.beginPath();
+    ctx.rect(0, 0, revealScreenX, HEIGHT);
+    ctx.clip();
+  }
+  ctx.strokeStyle = RASTER_LINE;
+  ctx.lineWidth = 1;
+  // Family 1: constant j, varying i (direction u).
+  for (let j = jMin; j <= jMax; j++) {
+    const [x0, y0] = world(iMin, j);
+    const [x1, y1] = world(iMax, j);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  }
+  // Family 2: constant i, varying j (direction v, perpendicular to u).
+  for (let i = iMin; i <= iMax; i++) {
+    const [x0, y0] = world(i, jMin);
+    const [x1, y1] = world(i, jMax);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -636,6 +780,8 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     onAnimationDone,
     highlightType = null,
     route = null,
+    showPath = true,
+    rasterPreview = null,
     pickMode = null,
     onPickPoint,
   },
@@ -681,6 +827,11 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     if (!canvas) return;
     const prepared = prepareCanvas(canvas);
     if (!prepared) return;
+    // While turning the compass, show only the outline + rotating raster (no holes/route).
+    if (rasterPreview && polygon && polygon.length >= 2) {
+      drawRasterPreview(prepared.ctx, polygon, projector, prepared.mono, rasterPreview.angle, rasterPreview.spacing);
+      return;
+    }
     drawStatic(
       prepared.ctx,
       polygon,
@@ -690,9 +841,9 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
       hovered,
       prepared.mono,
       highlightType,
-      route,
+      showPath ? route : null,
     );
-  }, [animate, polygon, placements, drillTypes, projector, hovered, fontsReady, highlightType, route]);
+  }, [animate, polygon, placements, drillTypes, projector, hovered, fontsReady, highlightType, route, showPath, rasterPreview]);
 
   // Animation timeline. `animate === "full"` plays k-means then the route; `animate ===
   // "route"` replays only the route (e.g. after the start/end/round-trip changes) so a
@@ -706,11 +857,13 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     const { ctx, mono } = prepared;
 
     const finish = () => {
-      drawStatic(ctx, polygon, placements, drillTypes, projector, hovered, mono, null, route);
+      drawStatic(
+        ctx, polygon, placements, drillTypes, projector, hovered, mono, null,
+        showPath ? route : null,
+      );
       doneRef.current?.();
     };
 
-    const frames = animation?.frames ?? [];
     const reduceMotion =
       typeof window !== "undefined" &&
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -719,20 +872,36 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
       return;
     }
 
-    // K-means stages run only for the "full" clip; a "route" replay skips them entirely.
-    const doKmeans = animate === "full" && frames.length > 0;
-    const gridPoints = animation?.gridPoints ?? [];
+    // The layout reveal runs only for the "full" clip; a "route" replay skips it. Exactly one
+    // of the two reveals applies, matching the mode of the captured animation.
+    const kmeans = animation?.kind === "kmeans" ? animation : null;
+    const grid = animation?.kind === "grid" ? animation : null;
+    const doKmeans = animate === "full" && !!kmeans && kmeans.frames.length > 0;
+    const doGrid = animate === "full" && !!grid;
+
+    // K-means stage timings.
+    const frames = kmeans?.frames ?? [];
+    const gridPoints = kmeans?.gridPoints ?? [];
     const stepCount = Math.max(1, frames.length - 1);
     const stepMs = Math.min(STEP_MAX_MS, Math.max(STEP_MIN_MS, ITER_TARGET_MS / stepCount));
     const sweepEnd = doKmeans ? SWEEP_MS : 0;
     const seedEnd = sweepEnd + (doKmeans ? SEED_MS : 0);
     const iterEnd = seedEnd + (doKmeans ? stepMs * stepCount : 0);
-    const revealEnd = iterEnd + (doKmeans ? REVEAL_MS : 0);
+    const kmeansRevealEnd = iterEnd + (doKmeans ? REVEAL_MS : 0);
+
+    // Grid (raster) stage timings: sweep the raster in, settle, then color into placements.
+    const rasterSweepEnd = doGrid ? RASTER_SWEEP_MS : 0;
+    const rasterPopEnd = rasterSweepEnd + (doGrid ? RASTER_POP_MS : 0);
+    const gridRevealEnd = rasterPopEnd + (doGrid ? REVEAL_MS : 0);
+
+    // End of whichever layout reveal ran; the route stages begin here.
+    const revealEnd = doGrid ? gridRevealEnd : kmeansRevealEnd;
 
     // Route (TSP) stages, played after the reveal (or immediately, for a route replay).
-    // Placements are already in the route's visiting order, so a lookup by original index
-    // lets us draw the recorded steps.
+    // Hidden entirely when the path is toggled off. Placements are already in the route's
+    // visiting order, so a lookup by original index lets us draw the recorded steps.
     const routeReady =
+      showPath &&
       !!route &&
       route.placements.length >= 2 &&
       placements.length >= 2 &&
@@ -780,50 +949,77 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
       drawGraticule(ctx, projector, mono);
       drawPolygon(ctx, polygon, projector);
 
-      if (elapsed < sweepEnd) {
-        // Stage 1: lay the interior grid over the area, left → right.
-        const revealX = elapsed / SWEEP_MS;
-        drawGridDots(ctx, gridPoints, projector, () => THEME.dot, 1, revealX);
-      } else if (elapsed < seedEnd) {
-        // Stage 2: drop the initial centroids.
-        const f = easeInOut((elapsed - sweepEnd) / SEED_MS);
-        drawGridDots(ctx, gridPoints, projector, () => THEME.dot, 1, null);
-        drawCentroids(ctx, frames[0], projector, CENTROID_R * f, f);
-      } else if (elapsed < iterEnd) {
-        // Stage 3: iterate — color by nearest centroid, glide centroids to means.
-        const local = elapsed - seedEnd;
-        const idx = Math.min(stepCount - 1, Math.floor(local / stepMs));
-        const f = easeInOut((local - idx * stepMs) / stepMs);
-        const from = frames[idx];
-        const to = frames[idx + 1] ?? frames[idx];
-        const cur = from.map((c, i) => ({
-          x: c.x + (to[i].x - c.x) * f,
-          y: c.y + (to[i].y - c.y) * f,
-        }));
-        drawGridDots(
-          ctx,
-          gridPoints,
-          projector,
-          (p) => clusterColor(nearestIndex(p, cur)),
-          1,
-          null,
-        );
-        drawCentroids(ctx, cur, projector, CENTROID_R, 1);
-      } else if (elapsed < revealEnd) {
-        // Stage 4: fade grid out, crossfade centroids → type-colored placements.
-        const f = easeInOut((elapsed - iterEnd) / REVEAL_MS);
-        const final = frames[frames.length - 1];
-        drawGridDots(
-          ctx,
-          gridPoints,
-          projector,
-          (p) => clusterColor(nearestIndex(p, final)),
-          1 - f,
-          null,
-        );
-        drawCentroids(ctx, final, projector, CENTROID_R, 1 - f);
-        drawPlacements(ctx, placements, drillTypes, projector, null, f);
-        drawScaleAndNorth(ctx, projector, mono);
+      if (doKmeans && elapsed < kmeansRevealEnd) {
+        if (elapsed < sweepEnd) {
+          // Stage 1: lay the interior grid over the area, left → right.
+          const revealX = elapsed / SWEEP_MS;
+          drawGridDots(ctx, gridPoints, projector, () => THEME.dot, 1, revealX);
+        } else if (elapsed < seedEnd) {
+          // Stage 2: drop the initial centroids.
+          const f = easeInOut((elapsed - sweepEnd) / SEED_MS);
+          drawGridDots(ctx, gridPoints, projector, () => THEME.dot, 1, null);
+          drawCentroids(ctx, frames[0], projector, CENTROID_R * f, f);
+        } else if (elapsed < iterEnd) {
+          // Stage 3: iterate — color by nearest centroid, glide centroids to means.
+          const local = elapsed - seedEnd;
+          const idx = Math.min(stepCount - 1, Math.floor(local / stepMs));
+          const f = easeInOut((local - idx * stepMs) / stepMs);
+          const from = frames[idx];
+          const to = frames[idx + 1] ?? frames[idx];
+          const cur = from.map((c, i) => ({
+            x: c.x + (to[i].x - c.x) * f,
+            y: c.y + (to[i].y - c.y) * f,
+          }));
+          drawGridDots(
+            ctx,
+            gridPoints,
+            projector,
+            (p) => clusterColor(nearestIndex(p, cur)),
+            1,
+            null,
+          );
+          drawCentroids(ctx, cur, projector, CENTROID_R, 1);
+        } else {
+          // Stage 4: fade grid out, crossfade centroids → type-colored placements.
+          const f = easeInOut((elapsed - iterEnd) / REVEAL_MS);
+          const final = frames[frames.length - 1];
+          drawGridDots(
+            ctx,
+            gridPoints,
+            projector,
+            (p) => clusterColor(nearestIndex(p, final)),
+            1 - f,
+            null,
+          );
+          drawCentroids(ctx, final, projector, CENTROID_R, 1 - f);
+          drawPlacements(ctx, placements, drillTypes, projector, null, f);
+          drawScaleAndNorth(ctx, projector, mono);
+        }
+      } else if (doGrid && elapsed < gridRevealEnd) {
+        // Grid stages: sweep the fitted raster in, settle the intersections, color into holes.
+        const b = projector.bounds;
+        if (elapsed < rasterSweepEnd) {
+          // G1: reveal the raster lines + interior intersections left → right.
+          const revealX = elapsed / RASTER_SWEEP_MS;
+          const worldX = b.minX + revealX * ((b.maxX - b.minX) || 1);
+          const screenX = projector.project({ x: worldX, y: b.maxY })[0];
+          drawRasterLines(ctx, projector, grid!.angle, grid!.spacing, grid!.origin, polygon, screenX, 1);
+          drawGridDots(ctx, grid!.rejected, projector, () => THEME.dot, 0.3, revealX);
+          drawGridDots(ctx, grid!.points, projector, () => THEME.dot, 1, revealX);
+        } else if (elapsed < rasterPopEnd) {
+          // G2: the full fitted raster, all intersections settled.
+          drawRasterLines(ctx, projector, grid!.angle, grid!.spacing, grid!.origin, polygon, null, 1);
+          drawGridDots(ctx, grid!.rejected, projector, () => THEME.dot, 0.3, null);
+          drawGridDots(ctx, grid!.points, projector, () => THEME.dot, 1, null);
+        } else {
+          // G3: fade the raster + neutral dots out, color into type-colored placements.
+          const f = easeInOut((elapsed - rasterPopEnd) / REVEAL_MS);
+          drawRasterLines(ctx, projector, grid!.angle, grid!.spacing, grid!.origin, polygon, null, 1 - f);
+          drawGridDots(ctx, grid!.rejected, projector, () => THEME.dot, 0.3 * (1 - f), null);
+          drawGridDots(ctx, grid!.points, projector, () => THEME.dot, 1 - f, null);
+          drawPlacements(ctx, placements, drillTypes, projector, null, f);
+          drawScaleAndNorth(ctx, projector, mono);
+        }
       } else if (routeReady && elapsed < routeEnd) {
         // Route stages: hold the finished holes, then build + untangle the route on top.
         drawPlacements(ctx, placements, drillTypes, projector, null, 1);
@@ -899,11 +1095,11 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
     // `hovered` is intentionally excluded: it never changes while animating and
     // including it would restart the timeline.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animate, animation, polygon, placements, drillTypes, projector, route]);
+  }, [animate, animation, polygon, placements, drillTypes, projector, route, showPath]);
 
   const onMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (animate || !placements.length) return;
+      if (animate || rasterPreview || !placements.length) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
@@ -921,11 +1117,12 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
       });
       setHovered(best);
     },
-    [animate, placements, projector],
+    [animate, rasterPreview, placements, projector],
   );
 
   const onClickCanvas = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (rasterPreview) return; // the map is a raster preview; ignore hole clicks
       // An armed start/end pick wins, even mid route-replay, so the user isn't blocked.
       if (pickMode && onPickPoint && placements.length) {
         const canvas = canvasRef.current;
@@ -948,7 +1145,7 @@ export const SitePlot = forwardRef<SitePlotHandle, SitePlotProps>(function SiteP
       }
       if (animate) skipRef.current = true; // otherwise a click skips the running animation
     },
-    [animate, pickMode, onPickPoint, placements, projector],
+    [animate, rasterPreview, pickMode, onPickPoint, placements, projector],
   );
 
   const hoveredPlacement = hovered != null ? placements[hovered] : null;

@@ -43,6 +43,15 @@ export interface Dict {
   drillColorLabel: string;
   drillSymbolLabel: string;
 
+  layoutLabel: string;
+  layoutOptimized: string;
+  layoutGrid: string;
+  layoutOptimizedHint: string;
+  layoutGridHint: string;
+  gridAngleLabel: string;
+  autoLabel: string;
+  gridAngleHint: string;
+
   compute: string;
   recompute: string;
   computing: string;
@@ -55,6 +64,7 @@ export interface Dict {
   replayAnimation: string;
 
   routeTitle: string;
+  showPathLabel: string;
   roundTrip: string;
   startLabel: string;
   endLabel: string;
@@ -109,6 +119,15 @@ const nl: Dict = {
   drillColorLabel: "Kleur",
   drillSymbolLabel: "Symbool",
 
+  layoutLabel: "Verdeling",
+  layoutOptimized: "Optimaal",
+  layoutGrid: "Raster",
+  layoutOptimizedHint: "Gelijkmatig gespreid, organisch verdeeld over het terrein.",
+  layoutGridHint: "Regelmatig raster — gelijke afstand, haakse rijen (evt. onder een hoek).",
+  gridAngleLabel: "Rasterhoek",
+  autoLabel: "Auto",
+  gridAngleHint: "Draai het kompas of typ een hoek om het raster te kantelen.",
+
   compute: "Plaatsing berekenen",
   recompute: "Opnieuw berekenen",
   computing: "Plaatsing optimaliseren…",
@@ -121,6 +140,7 @@ const nl: Dict = {
   replayAnimation: "Opnieuw afspelen",
 
   routeTitle: "Route",
+  showPathLabel: "Route-lijn",
   roundTrip: "Rondrit",
   startLabel: "Start",
   endLabel: "Eind",
@@ -140,7 +160,7 @@ const nl: Dict = {
 
   aboutTitle: "Hoe werkt het",
   about:
-    "DrillPlan legt een raster over het terrein, kiest gelijkmatig verdeelde punten met K-Means en zoekt de verdeling waarbij metingen van hetzelfde type zo ver mogelijk uit elkaar liggen. Tot slot worden de boringen in de kortste boorroute gezet (het handelsreizigersprobleem, opgelost met nearest-neighbor + 2-opt), zodat je de lijst van boven naar beneden kunt afwerken. Alles gebeurt lokaal — je bestand wordt nergens geüpload.",
+    "DrillPlan verdeelt de locaties op twee manieren: 'Optimaal' kiest gelijkmatig gespreide punten met K-Means, en 'Raster' legt een regelmatig, haaks raster (eventueel onder een hoek) over het terrein en boort op elk snijpunt binnen de omtrek. Daarna zoekt het de verdeling waarbij metingen van hetzelfde type zo ver mogelijk uit elkaar liggen, en zet het de boringen in de kortste boorroute (het handelsreizigersprobleem, opgelost met nearest-neighbor + 2-opt). Alles gebeurt lokaal — je bestand wordt nergens geüpload.",
 };
 
 const en: Dict = {
@@ -176,6 +196,15 @@ const en: Dict = {
   drillColorLabel: "Color",
   drillSymbolLabel: "Symbol",
 
+  layoutLabel: "Layout",
+  layoutOptimized: "Optimized",
+  layoutGrid: "Grid",
+  layoutOptimizedHint: "Evenly spread, organically distributed across the site.",
+  layoutGridHint: "Regular raster — equal spacing, perpendicular rows (optionally angled).",
+  gridAngleLabel: "Grid angle",
+  autoLabel: "Auto",
+  gridAngleHint: "Turn the compass or type an angle to rotate the raster.",
+
   compute: "Calculate placement",
   recompute: "Recalculate",
   computing: "Optimizing placement…",
@@ -188,6 +217,7 @@ const en: Dict = {
   replayAnimation: "Replay",
 
   routeTitle: "Route",
+  showPathLabel: "Path",
   roundTrip: "Round trip",
   startLabel: "Start",
   endLabel: "End",
@@ -207,7 +237,7 @@ const en: Dict = {
 
   aboutTitle: "How it works",
   about:
-    "DrillPlan lays a grid over the site, picks evenly spread candidate points with K-Means, then searches type assignments so that same-type measurements sit as far apart as possible. Finally it orders the holes into the shortest drilling route (the Traveling Salesman problem, solved with nearest-neighbor + 2-opt) so the CSV can be drilled top-to-bottom. Everything runs locally — your file is never uploaded.",
+    "DrillPlan places locations two ways: 'Optimized' picks evenly spread points with K-Means, while 'Grid' fits a regular, perpendicular raster (optionally angled) to the site and drills at every intersection inside the outline. It then searches type assignments so same-type measurements sit as far apart as possible, and orders the holes into the shortest drilling route (the Traveling Salesman problem, solved with nearest-neighbor + 2-opt) so the CSV can be drilled top-to-bottom. Everything runs locally — your file is never uploaded.",
 };
 
 const dictionaries: Record<Language, Dict> = { nl, en };
