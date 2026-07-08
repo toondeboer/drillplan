@@ -187,8 +187,6 @@ export default function Home() {
   const [showPath, setShowPath] = useState(true);
   // Grid mode: user-fixed raster angle (radians), or null to auto-pick the best angle.
   const [gridAngle, setGridAngle] = useState<number | null>(null);
-  // True while a quiet angle-adjust recompute is in flight (keeps the current view on screen).
-  const [adjusting, setAdjusting] = useState(false);
   const angleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // While turning the compass: show the outline + rotating raster (no holes) at this angle.
   const [rasterPreview, setRasterPreview] = useState<{ angle: number; spacing: number } | null>(null);
@@ -265,9 +263,10 @@ export default function Home() {
     downloadFile("drillplan-example.csv", polygonToCsv(generateExamplePolygon()));
   }, []);
 
-  // Run the compute worker for `input`. A "quiet" run (a live angle tweak) swaps the result in
-  // place and lands on "done" without replaying the reveal animation; a normal run animates.
-  const runWorker = useCallback((input: ComputeInput, quiet: boolean) => {
+  // Run the compute worker for `input`. On a result we play the reveal animation (the raster
+  // settling into holes, then the route building) — so every recompute, including an angle
+  // change, replays the full animation.
+  const runWorker = useCallback((input: ComputeInput) => {
     const worker = new Worker(
       new URL("../workers/compute.worker.ts", import.meta.url),
       { type: "module" },
@@ -276,14 +275,12 @@ export default function Home() {
       const msg = e.data;
       if (msg.type === "result") {
         setResult(msg.result);
-        setStatus(quiet ? "done" : msg.result.animation ? "animating" : "done");
-        setAdjusting(false);
-        setRasterPreview(null); // holes are ready — drop the turning preview
+        setStatus(msg.result.animation ? "animating" : "done");
+        setRasterPreview(null); // hand off from the turning preview to the reveal animation
         worker.terminate();
       } else if (msg.type === "error") {
         setError(msg.message);
         setStatus("error");
-        setAdjusting(false);
         setRasterPreview(null);
         worker.terminate();
       }
@@ -292,7 +289,6 @@ export default function Home() {
     worker.onerror = (e) => {
       setError(e.message || "Worker error");
       setStatus("error");
-      setAdjusting(false);
       setRasterPreview(null);
       worker.terminate();
     };
@@ -307,29 +303,24 @@ export default function Home() {
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
-    setAdjusting(false);
     turningRef.current = false;
     setRasterPreview(null);
     if (angleTimer.current) clearTimeout(angleTimer.current); // drop any pending angle tweak
-    runWorker(
-      { polygon, counts, mode, angleOverride: mode === "grid" ? gridAngle : null, captureAnimation: true },
-      false,
-    );
+    runWorker({ polygon, counts, mode, angleOverride: mode === "grid" ? gridAngle : null, captureAnimation: true });
   }, [polygon, counts, total, mode, gridAngle, runWorker]);
 
-  // Set the raster angle and (debounced) quietly recompute the grid at it — used by the
-  // keyboard, the Auto chip and the manual entry. `next === null` returns to the best angle.
+  // Set the raster angle and (debounced) recompute the grid at it, replaying the reveal
+  // animation. Used by the keyboard, the Auto chip and the manual entry. `next === null`
+  // returns to the auto-picked best angle.
   const handleAngleChange = useCallback(
     (next: number | null) => {
       setGridAngle(next);
       if (!polygon || total < 1) return;
-      setAdjusting(true);
+      setHighlightedType(null);
+      setPickMode(null);
       if (angleTimer.current) clearTimeout(angleTimer.current);
       angleTimer.current = setTimeout(() => {
-        runWorker(
-          { polygon, counts, mode: "grid", angleOverride: next, captureAnimation: true },
-          true,
-        );
+        runWorker({ polygon, counts, mode: "grid", angleOverride: next, captureAnimation: true });
       }, 140);
     },
     [polygon, counts, total, runWorker],
@@ -364,12 +355,11 @@ export default function Home() {
         setRasterPreview(null);
         return;
       }
-      setAdjusting(true);
-      // The preview stays on screen until the recomputed holes + route arrive (cleared in runWorker).
-      runWorker(
-        { polygon, counts, mode: "grid", angleOverride: next, captureAnimation: true },
-        true,
-      );
+      setHighlightedType(null);
+      setPickMode(null);
+      // The turning preview stays on screen until the result arrives, then the reveal animation
+      // plays (raster settles into holes, route builds) at the released angle.
+      runWorker({ polygon, counts, mode: "grid", angleOverride: next, captureAnimation: true });
     },
     [polygon, counts, total, runWorker],
   );
@@ -802,9 +792,6 @@ export default function Home() {
                         >
                           {t.autoLabel}
                         </button>
-                        {adjusting && (
-                          <span className="font-mono text-[11px] text-clay">{t.optimizing}</span>
-                        )}
                       </div>
                       <p className="mt-1 text-[11.5px] leading-[1.4] text-ink-3">{t.gridAngleHint}</p>
                     </div>
