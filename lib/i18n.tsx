@@ -126,7 +126,7 @@ const nl: Dict = {
   layoutGridHint: "Regelmatig raster — gelijke afstand, haakse rijen (evt. onder een hoek).",
   gridAngleLabel: "Rasterhoek",
   autoLabel: "Auto",
-  gridAngleHint: "Draai aan het kompas om het raster te kantelen.",
+  gridAngleHint: "Draai het kompas of typ een hoek om het raster te kantelen.",
 
   compute: "Plaatsing berekenen",
   recompute: "Opnieuw berekenen",
@@ -203,7 +203,7 @@ const en: Dict = {
   layoutGridHint: "Regular raster — equal spacing, perpendicular rows (optionally angled).",
   gridAngleLabel: "Grid angle",
   autoLabel: "Auto",
-  gridAngleHint: "Turn the compass to rotate the raster.",
+  gridAngleHint: "Turn the compass or type an angle to rotate the raster.",
 
   compute: "Calculate placement",
   recompute: "Recalculate",

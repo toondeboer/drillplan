@@ -7,6 +7,10 @@ interface AngleDialProps {
   angle: number;
   /** Fired with a new angle (radians, wrapped to [0, π/2)) as the user turns the dial. */
   onChange: (angle: number) => void;
+  /** Pointer-drag begins (grab the dial). Use to enter a live-preview mode. */
+  onDragStart?: () => void;
+  /** Pointer-drag ends (release), with the final angle. Use to commit / recompute. */
+  onDragEnd?: (angle: number) => void;
   size?: number;
   disabled?: boolean;
   title?: string;
@@ -25,7 +29,15 @@ function wrapQuadrant(a: number): number {
  * perpendicular and interchangeable, the dial shows a rotating "+" (both axes drawn equally),
  * which makes the 90° wrap seamless. Drag it, or focus it and use the arrow keys.
  */
-export function AngleDial({ angle, onChange, size = 60, disabled = false, title }: AngleDialProps) {
+export function AngleDial({
+  angle,
+  onChange,
+  onDragStart,
+  onDragEnd,
+  size = 60,
+  disabled = false,
+  title,
+}: AngleDialProps) {
   const ref = useRef<SVGSVGElement>(null);
   const dragging = useRef(false);
 
@@ -48,8 +60,9 @@ export function AngleDial({ angle, onChange, size = 60, disabled = false, title 
     e.preventDefault();
     dragging.current = true;
     ref.current?.setPointerCapture(e.pointerId);
+    onDragStart?.();
     onChange(angleFromEvent(e));
-  }, [disabled, onChange, angleFromEvent]);
+  }, [disabled, onDragStart, onChange, angleFromEvent]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
     if (!dragging.current) return;
@@ -57,9 +70,11 @@ export function AngleDial({ angle, onChange, size = 60, disabled = false, title 
   }, [onChange, angleFromEvent]);
 
   const endDrag = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
+    if (!dragging.current) return;
     dragging.current = false;
     ref.current?.releasePointerCapture?.(e.pointerId);
-  }, []);
+    onDragEnd?.(angleFromEvent(e));
+  }, [onDragEnd, angleFromEvent]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent<SVGSVGElement>) => {
     if (disabled) return;

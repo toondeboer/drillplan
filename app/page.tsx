@@ -190,6 +190,9 @@ export default function Home() {
   // True while a quiet angle-adjust recompute is in flight (keeps the current view on screen).
   const [adjusting, setAdjusting] = useState(false);
   const angleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // While turning the compass: show the outline + rotating raster (no holes) at this angle.
+  const [rasterPreview, setRasterPreview] = useState<{ angle: number; spacing: number } | null>(null);
+  const turningRef = useRef(false);
 
   const plotRef = useRef<SitePlotHandle>(null);
 
@@ -275,11 +278,13 @@ export default function Home() {
         setResult(msg.result);
         setStatus(quiet ? "done" : msg.result.animation ? "animating" : "done");
         setAdjusting(false);
+        setRasterPreview(null); // holes are ready — drop the turning preview
         worker.terminate();
       } else if (msg.type === "error") {
         setError(msg.message);
         setStatus("error");
         setAdjusting(false);
+        setRasterPreview(null);
         worker.terminate();
       }
       // "progress" messages are ignored — the busy indicator is indeterminate.
@@ -288,6 +293,7 @@ export default function Home() {
       setError(e.message || "Worker error");
       setStatus("error");
       setAdjusting(false);
+      setRasterPreview(null);
       worker.terminate();
     };
     worker.postMessage(input);
@@ -302,6 +308,8 @@ export default function Home() {
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
     setAdjusting(false);
+    turningRef.current = false;
+    setRasterPreview(null);
     if (angleTimer.current) clearTimeout(angleTimer.current); // drop any pending angle tweak
     runWorker(
       { polygon, counts, mode, angleOverride: mode === "grid" ? gridAngle : null, captureAnimation: true },
@@ -309,8 +317,8 @@ export default function Home() {
     );
   }, [polygon, counts, total, mode, gridAngle, runWorker]);
 
-  // Turn the raster: update the dial immediately, then (debounced) quietly recompute the grid
-  // at the new angle. `next === null` returns to the auto-picked best angle.
+  // Set the raster angle and (debounced) quietly recompute the grid at it — used by the
+  // keyboard, the Auto chip and the manual entry. `next === null` returns to the best angle.
   const handleAngleChange = useCallback(
     (next: number | null) => {
       setGridAngle(next);
@@ -323,6 +331,45 @@ export default function Home() {
           true,
         );
       }, 140);
+    },
+    [polygon, counts, total, runWorker],
+  );
+
+  // Compass drag. Grab → show a live raster preview (holes hidden); drag → rotate the raster;
+  // release → recompute the placement + route at the released angle (holes reappear).
+  const beginTurn = useCallback(() => {
+    if (!result?.grid) return;
+    turningRef.current = true;
+    if (angleTimer.current) clearTimeout(angleTimer.current); // no debounced recompute mid-drag
+    setRasterPreview({ angle: gridAngle ?? result.grid.angle, spacing: result.grid.spacing });
+  }, [result, gridAngle]);
+
+  const turnTo = useCallback(
+    (next: number) => {
+      if (turningRef.current) {
+        setGridAngle(next);
+        setRasterPreview((p) => ({ angle: next, spacing: p?.spacing ?? result?.grid?.spacing ?? 0 }));
+      } else {
+        handleAngleChange(next); // keyboard: no live preview, just a debounced recompute
+      }
+    },
+    [result, handleAngleChange],
+  );
+
+  const endTurn = useCallback(
+    (next: number) => {
+      turningRef.current = false;
+      setGridAngle(next);
+      if (!polygon || total < 1) {
+        setRasterPreview(null);
+        return;
+      }
+      setAdjusting(true);
+      // The preview stays on screen until the recomputed holes + route arrive (cleared in runWorker).
+      runWorker(
+        { polygon, counts, mode: "grid", angleOverride: next, captureAnimation: true },
+        true,
+      );
     },
     [polygon, counts, total, runWorker],
   );
@@ -690,6 +737,7 @@ export default function Home() {
               highlightType={highlightedType}
               route={routed}
               showPath={showPath}
+              rasterPreview={rasterPreview}
               pickMode={status === "done" || status === "routing" ? pickMode : null}
               onPickPoint={handlePickPoint}
             />
@@ -716,7 +764,9 @@ export default function Home() {
                   <div className="mt-3 flex items-center gap-3.5 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-3">
                     <AngleDial
                       angle={gridAngle ?? result.grid.angle}
-                      onChange={handleAngleChange}
+                      onChange={turnTo}
+                      onDragStart={beginTurn}
+                      onDragEnd={endTurn}
                       title={t.gridAngleLabel}
                     />
                     <div className="min-w-0 flex-1">
@@ -724,9 +774,22 @@ export default function Home() {
                         <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
                           {t.gridAngleLabel}
                         </span>
-                        <span className="font-mono text-[15px] font-semibold text-ink">
-                          {Math.round((((gridAngle ?? result.grid.angle) * 180) / Math.PI) % 90)}°
-                        </span>
+                        <div className="inline-flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={0}
+                            max={90}
+                            value={Math.round((((gridAngle ?? result.grid.angle) * 180) / Math.PI) % 90)}
+                            onChange={(e) => {
+                              const raw = parseFloat(e.target.value);
+                              const deg = Math.max(0, Math.min(90, Number.isFinite(raw) ? raw : 0));
+                              handleAngleChange(((deg % 90) * Math.PI) / 180);
+                            }}
+                            aria-label={t.gridAngleLabel}
+                            className="w-[46px] rounded-md border border-hairline bg-white px-1 py-[3px] text-center font-mono text-[14px] font-semibold text-ink outline-none focus:border-clay-soft-border"
+                          />
+                          <span className="font-mono text-[13px] font-semibold text-ink-3">°</span>
+                        </div>
                         <button
                           type="button"
                           aria-pressed={gridAngle == null}
