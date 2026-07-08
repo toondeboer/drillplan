@@ -60,6 +60,11 @@ export interface ComputeInput {
   counts: number[];
   /** How to generate positions (default "kmeans"). */
   mode?: PlacementMode;
+  /**
+   * Grid mode only: fix the raster rotation to this angle (radians) instead of auto-picking
+   * the best one. Null/undefined ⇒ search for the best angle.
+   */
+  angleOverride?: number | null;
   /** Grid resolution used to sample candidate points (default 200). */
   gridResolution?: number;
   /** Number of random assignments to try (default 20000, like the original). */
@@ -105,6 +110,8 @@ export interface ComputeResult {
   candidateCount: number;
   /** Present only when `captureAnimation` was requested. */
   animation?: PlacementAnimation;
+  /** Grid mode only: the fitted raster's rotation (radians) and spacing (world units). */
+  grid?: { angle: number; spacing: number };
 }
 
 /** How to order holes into the drilling route (Traveling Salesman). */

@@ -48,6 +48,9 @@ export interface Dict {
   layoutGrid: string;
   layoutOptimizedHint: string;
   layoutGridHint: string;
+  gridAngleLabel: string;
+  autoLabel: string;
+  gridAngleHint: string;
 
   compute: string;
   recompute: string;
@@ -121,6 +124,9 @@ const nl: Dict = {
   layoutGrid: "Raster",
   layoutOptimizedHint: "Gelijkmatig gespreid, organisch verdeeld over het terrein.",
   layoutGridHint: "Regelmatig raster — gelijke afstand, haakse rijen (evt. onder een hoek).",
+  gridAngleLabel: "Rasterhoek",
+  autoLabel: "Auto",
+  gridAngleHint: "Draai aan het kompas om het raster te kantelen.",
 
   compute: "Plaatsing berekenen",
   recompute: "Opnieuw berekenen",
@@ -195,6 +201,9 @@ const en: Dict = {
   layoutGrid: "Grid",
   layoutOptimizedHint: "Evenly spread, organically distributed across the site.",
   layoutGridHint: "Regular raster — equal spacing, perpendicular rows (optionally angled).",
+  gridAngleLabel: "Grid angle",
+  autoLabel: "Auto",
+  gridAngleHint: "Turn the compass to rotate the raster.",
 
   compute: "Calculate placement",
   recompute: "Recalculate",

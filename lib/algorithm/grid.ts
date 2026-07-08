@@ -27,6 +27,17 @@ export interface GridResult {
 }
 
 export interface GridOptions {
+  /**
+   * Fix the grid rotation to this angle (radians) instead of searching for the best one.
+   * Null/undefined ⇒ search all angles. A square lattice repeats every 90°, so the value is
+   * wrapped into [0, π/2).
+   */
+  angle?: number | null;
+  /**
+   * Minimum distance every hole must keep from the site boundary, as a fraction of the grid
+   * spacing (default 0.3). Keeps holes off the outline/fence rather than sitting on the edge.
+   */
+  marginFactor?: number;
   /** Angles tried across [0, 90°). More ⇒ better rotation fit, slower. Default 30 (3° step). */
   angleSteps?: number;
   /** Phase offsets tried per axis within one cell. Default 4 (a 4×4 grid of offsets). */
@@ -35,6 +46,9 @@ export interface GridOptions {
   coverageSamples?: number;
   onProgress?: (fraction: number) => void;
 }
+
+/** Default boundary keep-out, as a fraction of the grid spacing. */
+const DEFAULT_MARGIN_FACTOR = 0.3;
 
 /** Signed-area centroid of a polygon; falls back to the bbox center when degenerate. */
 function polygonCentroid(polygon: Point[], bounds: Bounds): Point {
@@ -110,7 +124,16 @@ function latticeRange(
   };
 }
 
-/** How many lattice intersections fall inside the polygon for one arrangement. */
+/**
+ * Whether a lattice point counts as a usable hole: inside the polygon AND at least
+ * `margin` away from the boundary, so holes never sit on (or hug) the site edge.
+ */
+function usable(x: number, y: number, polygon: Point[], margin: number): boolean {
+  if (!pointInPolygon(x, y, polygon)) return false;
+  return margin <= 0 || distToBoundary({ x, y }, polygon) >= margin;
+}
+
+/** How many lattice intersections are usable holes for one arrangement. */
 function countInside(
   polygon: Point[],
   bounds: Bounds,
@@ -119,8 +142,10 @@ function countInside(
   sin: number,
   ox: number,
   oy: number,
+  marginFactor: number,
 ): number {
   const { iMin, iMax, jMin, jMax } = latticeRange(bounds, s, cos, sin, ox, oy);
+  const margin = marginFactor * s;
   let count = 0;
   for (let i = iMin; i <= iMax; i++) {
     const ux = i * s * cos;
@@ -128,13 +153,16 @@ function countInside(
     for (let j = jMin; j <= jMax; j++) {
       const x = ox + ux - j * s * sin;
       const y = oy + uy + j * s * cos;
-      if (pointInPolygon(x, y, polygon)) count++;
+      if (usable(x, y, polygon, margin)) count++;
     }
   }
   return count;
 }
 
-/** All lattice intersections for one arrangement, split into inside / outside the polygon. */
+/**
+ * All lattice intersections for one arrangement, split into usable holes ("inside", ≥ margin
+ * from the boundary) and everything else ("outside": beyond the polygon or within the margin).
+ */
 function collectPoints(
   polygon: Point[],
   bounds: Bounds,
@@ -143,8 +171,10 @@ function collectPoints(
   sin: number,
   ox: number,
   oy: number,
+  marginFactor: number,
 ): { inside: Point[]; outside: Point[] } {
   const { iMin, iMax, jMin, jMax } = latticeRange(bounds, s, cos, sin, ox, oy);
+  const margin = marginFactor * s;
   const inside: Point[] = [];
   const outside: Point[] = [];
   for (let i = iMin; i <= iMax; i++) {
@@ -153,7 +183,7 @@ function collectPoints(
     for (let j = jMin; j <= jMax; j++) {
       const x = ox + ux - j * s * sin;
       const y = oy + uy + j * s * cos;
-      (pointInPolygon(x, y, polygon) ? inside : outside).push({ x, y });
+      (usable(x, y, polygon, margin) ? inside : outside).push({ x, y });
     }
   }
   return { inside, outside };
@@ -217,26 +247,28 @@ function fitSpacing(
   ox: number,
   oy: number,
   s0: number,
+  marginFactor: number,
 ): { spacing: number; count: number } {
-  let lo = s0; // want countInside(lo) >= target
-  let hi = s0; // want countInside(hi)  <  target
+  const count = (s: number) => countInside(polygon, bounds, s, cos, sin, ox, oy, marginFactor);
+  let lo = s0; // want count(lo) >= target
+  let hi = s0; // want count(hi)  <  target
   // Expand lo downward (denser) until it holds enough points.
   let guard = 0;
-  while (countInside(polygon, bounds, lo, cos, sin, ox, oy) < target && guard++ < 40) {
+  while (count(lo) < target && guard++ < 40) {
     lo *= 0.75;
   }
   // Expand hi upward (coarser) until it holds too few.
   guard = 0;
-  while (countInside(polygon, bounds, hi, cos, sin, ox, oy) >= target && guard++ < 40) {
+  while (count(hi) >= target && guard++ < 40) {
     hi *= 1.4;
   }
   // Bisect toward the density transition; `lo` stays the coarsest spacing with count ≥ target.
   for (let it = 0; it < 34; it++) {
     const mid = (lo + hi) / 2;
-    if (countInside(polygon, bounds, mid, cos, sin, ox, oy) >= target) lo = mid;
+    if (count(mid) >= target) lo = mid;
     else hi = mid;
   }
-  return { spacing: lo, count: countInside(polygon, bounds, lo, cos, sin, ox, oy) };
+  return { spacing: lo, count: count(lo) };
 }
 
 /**
@@ -259,8 +291,19 @@ export function computeGrid(
 
   const pc = polygonCentroid(polygon, bounds);
   const s0 = Math.sqrt(area / count); // spacing at which ~count points fit
-  const angleSteps = options.angleSteps ?? 30;
   const offsetSteps = options.offsetSteps ?? 4;
+  const marginFactor = options.marginFactor ?? DEFAULT_MARGIN_FACTOR;
+
+  // Which rotations to try: a single user-fixed angle, or a sweep across the quadrant.
+  const angles: number[] = [];
+  if (options.angle != null) {
+    let a = options.angle % (Math.PI / 2);
+    if (a < 0) a += Math.PI / 2; // square lattice repeats every 90°
+    angles.push(a);
+  } else {
+    const angleSteps = options.angleSteps ?? 30;
+    for (let ai = 0; ai < angleSteps; ai++) angles.push((Math.PI / 2) * (ai / angleSteps));
+  }
 
   // Coverage reference samples (coarse interior grid, capped for speed).
   const targetSamples = options.coverageSamples ?? 400;
@@ -276,8 +319,8 @@ export function computeGrid(
   let over: { angle: number; spacing: number; ox: number; oy: number; count: number } | null =
     null;
 
-  for (let ai = 0; ai < angleSteps; ai++) {
-    const angle = (Math.PI / 2) * (ai / angleSteps); // [0, 90°)
+  for (let ai = 0; ai < angles.length; ai++) {
+    const angle = angles[ai];
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     for (let oi = 0; oi < offsetSteps; oi++) {
@@ -287,8 +330,8 @@ export function computeGrid(
         // Shift the lattice origin by a fraction of a cell along each axis.
         const ox = pc.x + (fu * cos - fv * sin) * s0;
         const oy = pc.y + (fu * sin + fv * cos) * s0;
-        const fit = fitSpacing(polygon, bounds, count, cos, sin, ox, oy, s0);
-        const { inside } = collectPoints(polygon, bounds, fit.spacing, cos, sin, ox, oy);
+        const fit = fitSpacing(polygon, bounds, count, cos, sin, ox, oy, s0, marginFactor);
+        const { inside } = collectPoints(polygon, bounds, fit.spacing, cos, sin, ox, oy, marginFactor);
         const cost = coverageCost(coverageRef, inside);
         if (fit.count === count) {
           if (cost < bestCost) {
@@ -301,7 +344,7 @@ export function computeGrid(
         }
       }
     }
-    options.onProgress?.((ai + 1) / angleSteps);
+    options.onProgress?.((ai + 1) / angles.length);
   }
 
   const chosen = best ?? over;
@@ -321,6 +364,7 @@ export function computeGrid(
     sin,
     chosen.ox,
     chosen.oy,
+    marginFactor,
   );
 
   let centers = inside;

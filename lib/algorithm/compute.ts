@@ -47,13 +47,16 @@ export function compute(input: ComputeInput, callbacks: ComputeCallbacks = {}): 
   let centers: Point[];
   let candidateCount: number;
   let animation: PlacementAnimation | undefined;
+  let gridInfo: ComputeResult["grid"];
 
   if (mode === "grid") {
     const grid = computeGrid(polygon, total, {
+      angle: input.angleOverride ?? null,
       onProgress: (f) => callbacks.onProgress?.("grid", f),
     });
     centers = grid.centers;
     candidateCount = grid.centers.length + grid.trimmed.length;
+    gridInfo = { angle: grid.arrangement.angle, spacing: grid.arrangement.spacing };
     animation = input.captureAnimation
       ? {
           kind: "grid",
@@ -111,5 +114,5 @@ export function compute(input: ComputeInput, callbacks: ComputeCallbacks = {}): 
     }
   }
 
-  return { placements, score, candidateCount, animation };
+  return { placements, score, candidateCount, animation, grid: gridInfo };
 }

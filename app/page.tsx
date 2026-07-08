@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AngleDial } from "@/components/AngleDial";
 import { FileUpload } from "@/components/FileUpload";
 import { Legend } from "@/components/Legend";
 import { LanguageToggle } from "@/components/LanguageToggle";
@@ -184,6 +185,11 @@ export default function Home() {
   const [mode, setMode] = useState<PlacementMode>("kmeans");
   // Whether the drilling route path (lines/numbers/endpoints) is drawn over the holes.
   const [showPath, setShowPath] = useState(true);
+  // Grid mode: user-fixed raster angle (radians), or null to auto-pick the best angle.
+  const [gridAngle, setGridAngle] = useState<number | null>(null);
+  // True while a quiet angle-adjust recompute is in flight (keeps the current view on screen).
+  const [adjusting, setAdjusting] = useState(false);
+  const angleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const plotRef = useRef<SitePlotHandle>(null);
 
@@ -212,6 +218,7 @@ export default function Home() {
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
+    setGridAngle(null);
     // A shapefile arrives as several sibling files; the .shp carries the geometry.
     // A CSV arrives on its own. Pick the source file by extension.
     const shp = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
@@ -240,12 +247,50 @@ export default function Home() {
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
+    setGridAngle(null);
     setPolygon(generateExamplePolygon());
     setFileName("example-site.csv");
   }, []);
 
+  // Switch the placement layout; reset any manual raster angle so a fresh layout auto-fits.
+  const handleSetMode = useCallback((m: PlacementMode) => {
+    setMode(m);
+    setGridAngle(null);
+  }, []);
+
   const handleDownloadExample = useCallback(() => {
     downloadFile("drillplan-example.csv", polygonToCsv(generateExamplePolygon()));
+  }, []);
+
+  // Run the compute worker for `input`. A "quiet" run (a live angle tweak) swaps the result in
+  // place and lands on "done" without replaying the reveal animation; a normal run animates.
+  const runWorker = useCallback((input: ComputeInput, quiet: boolean) => {
+    const worker = new Worker(
+      new URL("../workers/compute.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+    worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
+      const msg = e.data;
+      if (msg.type === "result") {
+        setResult(msg.result);
+        setStatus(quiet ? "done" : msg.result.animation ? "animating" : "done");
+        setAdjusting(false);
+        worker.terminate();
+      } else if (msg.type === "error") {
+        setError(msg.message);
+        setStatus("error");
+        setAdjusting(false);
+        worker.terminate();
+      }
+      // "progress" messages are ignored — the busy indicator is indeterminate.
+    };
+    worker.onerror = (e) => {
+      setError(e.message || "Worker error");
+      setStatus("error");
+      setAdjusting(false);
+      worker.terminate();
+    };
+    worker.postMessage(input);
   }, []);
 
   const runCompute = useCallback(() => {
@@ -256,33 +301,31 @@ export default function Home() {
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
-
-    const worker = new Worker(
-      new URL("../workers/compute.worker.ts", import.meta.url),
-      { type: "module" },
+    setAdjusting(false);
+    if (angleTimer.current) clearTimeout(angleTimer.current); // drop any pending angle tweak
+    runWorker(
+      { polygon, counts, mode, angleOverride: mode === "grid" ? gridAngle : null, captureAnimation: true },
+      false,
     );
-    const input: ComputeInput = { polygon, counts, mode, captureAnimation: true };
+  }, [polygon, counts, total, mode, gridAngle, runWorker]);
 
-    worker.onmessage = (e: MessageEvent<WorkerOutMessage>) => {
-      const msg = e.data;
-      if (msg.type === "result") {
-        setResult(msg.result);
-        setStatus(msg.result.animation ? "animating" : "done");
-        worker.terminate();
-      } else if (msg.type === "error") {
-        setError(msg.message);
-        setStatus("error");
-        worker.terminate();
-      }
-      // "progress" messages are ignored — the busy indicator is indeterminate.
-    };
-    worker.onerror = (e) => {
-      setError(e.message || "Worker error");
-      setStatus("error");
-      worker.terminate();
-    };
-    worker.postMessage(input);
-  }, [polygon, counts, total, mode]);
+  // Turn the raster: update the dial immediately, then (debounced) quietly recompute the grid
+  // at the new angle. `next === null` returns to the auto-picked best angle.
+  const handleAngleChange = useCallback(
+    (next: number | null) => {
+      setGridAngle(next);
+      if (!polygon || total < 1) return;
+      setAdjusting(true);
+      if (angleTimer.current) clearTimeout(angleTimer.current);
+      angleTimer.current = setTimeout(() => {
+        runWorker(
+          { polygon, counts, mode: "grid", angleOverride: next, captureAnimation: true },
+          true,
+        );
+      }, 140);
+    },
+    [polygon, counts, total, runWorker],
+  );
 
   const handleDownloadCsv = useCallback(() => {
     if (!routedPlacements) return;
@@ -332,6 +375,7 @@ export default function Home() {
     setHighlightedType(null);
     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
     setPickMode(null);
+    setGridAngle(null);
   }, [persistDrillTypes]);
 
   // Edit a drill type's appearance (name/color/symbol). The index is unchanged, so the current
@@ -492,6 +536,7 @@ export default function Home() {
                     setError(null);
                     setRouteOptions(DEFAULT_ROUTE_OPTIONS);
                     setPickMode(null);
+                    setGridAngle(null);
                   }}
                   className="cursor-pointer text-[13px] font-medium text-ink-3 transition hover:text-ink"
                 >
@@ -552,7 +597,7 @@ export default function Home() {
                       key={m}
                       type="button"
                       aria-pressed={active}
-                      onClick={() => setMode(m)}
+                      onClick={() => handleSetMode(m)}
                       className={`flex flex-col gap-1.5 rounded-[11px] border p-3 text-left transition ${
                         active
                           ? "border-clay bg-clay-soft-bg"
@@ -665,6 +710,43 @@ export default function Home() {
                     </span>
                   </div>
                 </div>
+
+                {/* Raster angle compass — grid layout only. Turn it to rotate the raster. */}
+                {mode === "grid" && result.grid && (
+                  <div className="mt-3 flex items-center gap-3.5 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-3">
+                    <AngleDial
+                      angle={gridAngle ?? result.grid.angle}
+                      onChange={handleAngleChange}
+                      title={t.gridAngleLabel}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <span className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-4">
+                          {t.gridAngleLabel}
+                        </span>
+                        <span className="font-mono text-[15px] font-semibold text-ink">
+                          {Math.round((((gridAngle ?? result.grid.angle) * 180) / Math.PI) % 90)}°
+                        </span>
+                        <button
+                          type="button"
+                          aria-pressed={gridAngle == null}
+                          onClick={() => handleAngleChange(null)}
+                          className={`inline-flex cursor-pointer items-center rounded-full border px-[11px] py-1 font-mono text-xs font-semibold transition ${
+                            gridAngle == null
+                              ? "border-clay bg-clay-soft-bg text-clay"
+                              : "border-hairline-2 bg-surface text-ink-2 hover:text-ink"
+                          }`}
+                        >
+                          {t.autoLabel}
+                        </button>
+                        {adjusting && (
+                          <span className="font-mono text-[11px] text-clay">{t.optimizing}</span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-[11.5px] leading-[1.4] text-ink-3">{t.gridAngleHint}</p>
+                    </div>
+                  </div>
+                )}
 
                 {/* Drilling route (Traveling Salesman) controls */}
                 <div className="mt-3 rounded-[11px] border border-hairline-2 bg-surface-inset px-[15px] py-[13px]">

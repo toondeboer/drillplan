@@ -90,4 +90,31 @@ describe("computeGrid", () => {
     expect(centers).toHaveLength(1);
     expect(pointInPolygon(centers[0].x, centers[0].y, square)).toBe(true);
   });
+
+  it("respects a fixed angle override (wrapped into the quadrant)", () => {
+    const { arrangement } = computeGrid(square, 12, { angle: Math.PI / 6 });
+    expect(arrangement.angle).toBeCloseTo(Math.PI / 6, 6);
+
+    // Angles wrap every 90° for a square lattice.
+    const wrapped = computeGrid(square, 12, { angle: Math.PI / 2 + 0.1 });
+    expect(wrapped.arrangement.angle).toBeCloseTo(0.1, 6);
+  });
+
+  it("keeps every hole at least the margin away from the boundary", () => {
+    const marginFactor = 0.3;
+    const { centers, arrangement } = computeGrid(square, 16, { marginFactor });
+    const margin = marginFactor * arrangement.spacing;
+    for (const p of centers) {
+      const distToEdge = Math.min(p.x, 100 - p.x, p.y, 100 - p.y); // square boundary distance
+      expect(distToEdge).toBeGreaterThanOrEqual(margin - 1e-6);
+    }
+  });
+
+  it("with zero margin can place holes nearer the edge than a positive margin", () => {
+    const tight = computeGrid(square, 16, { marginFactor: 0 });
+    const eased = computeGrid(square, 16, { marginFactor: 0.35 });
+    const minEdge = (pts: { x: number; y: number }[]) =>
+      Math.min(...pts.map((p) => Math.min(p.x, 100 - p.x, p.y, 100 - p.y)));
+    expect(minEdge(tight.centers)).toBeLessThan(minEdge(eased.centers) + 1e-9);
+  });
 });
