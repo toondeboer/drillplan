@@ -17,10 +17,27 @@ const ibmPlexMono = IBM_Plex_Mono({
   display: "swap",
 });
 
+const title = "DrillPlan — evenly spread drilling locations";
+const description =
+  "Plan evenly distributed soil-investigation drilling locations across a site. Runs entirely in your browser.";
+
+// The preview image comes from app/opengraph-image.tsx and app/twitter-image.tsx.
 export const metadata: Metadata = {
-  title: "DrillPlan — evenly spread drilling locations",
-  description:
-    "Plan evenly distributed soil-investigation drilling locations across a site. Runs entirely in your browser.",
+  metadataBase: new URL("https://drillplan.toondeboer.com"),
+  title,
+  description,
+  openGraph: {
+    type: "website",
+    url: "https://drillplan.toondeboer.com",
+    siteName: "DrillPlan",
+    title,
+    description,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title,
+    description,
+  },
 };
 
 export default function RootLayout({
